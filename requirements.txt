@@ -7,4 +7,4 @@ pyttsx3
 gTTS
 flask
 flask-socketio
-mysql-connector-python
+mysql-connector-python  
