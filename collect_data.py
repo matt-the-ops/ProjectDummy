@@ -8,6 +8,7 @@ from mediapipe.tasks.python import vision
 
 CSV_FILE = 'fsl_dataset.csv'
 
+# Create CSV header if file doesn't exist
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode='w', newline='') as f:
         writer = csv.writer(f)
@@ -19,7 +20,8 @@ options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
 detector = vision.HandLandmarker.create_from_options(options)
 
 cap = cv2.VideoCapture(0)
-print("Hold an FSL sign and press a letter key (e.g. 'a') to save frames. Press 'q' to exit.")
+print("Hold an FSL sign and press any letter/number key to save frames.")
+print("Press 'ESC' key to exit.")
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -31,11 +33,18 @@ while cap.isOpened():
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     detection_result = detector.detect(mp_image)
 
+    # Capture keypress once per frame
+    key = cv2.waitKey(1) & 0xFF
+
+    # Press ESC key (27) to exit script
+    if key == 27:
+        break
+
     if detection_result.hand_landmarks:
         landmarks = detection_result.hand_landmarks[0]
         wrist_x, wrist_y, wrist_z = landmarks[0].x, landmarks[0].y, landmarks[0].z
 
-        # Scale normalization (prevents distance confusion)
+        # Scale normalization (wrist to middle knuckle)
         scale = math.sqrt((landmarks[9].x - wrist_x)**2 + (landmarks[9].y - wrist_y)**2 + (landmarks[9].z - wrist_z)**2)
         if scale == 0:
             scale = 1.0
@@ -48,16 +57,14 @@ while cap.isOpened():
             px, py = int(lm.x * frame.shape[1]), int(lm.y * frame.shape[0])
             cv2.circle(frame, (px, py), 5, (0, 255, 0), -1)
 
-        key = cv2.waitKey(1) & 0xFF
-        if key != 255 and key != ord('q'):
+        # Save data row if a valid key was pressed
+        if key != 255:
             label = chr(key).upper()
             with open(CSV_FILE, mode='a', newline='') as f:
                 csv.writer(f).writerow([label] + row)
-            print(f"Saved 1 frame for: {label}")
+            print(f"Saved 1 frame for label: {label}")
 
     cv2.imshow("FSL Data Collector", frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
 
 cap.release()
 cv2.destroyAllWindows()
