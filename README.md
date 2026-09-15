@@ -86,10 +86,17 @@ python predict.py
 On-Screen Controls & Keybindings:
 
 1         - Switch to Mode 1 (Letters)
+
 2         - Switch to Mode 2 (Words)
+
 N         - Toggle Camera Device Index (0, 1, 2)
+
 ENTER     - Speak full accumulated output sentence via TTS
+
 SPACE     - Insert space character into output string
+
 BACKSPACE - Delete last character in output string
+
 C         - Clear output text buffer
+
 Q         - Exit Application
