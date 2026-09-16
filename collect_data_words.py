@@ -1,171 +1,346 @@
-import os
+﻿import os
 import cv2
 import shutil
-import time
 import numpy as np
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 
-DATA_PATH = 'word_dataset'
-MODEL_PATH = 'word_model.pkl'
-SEQUENCE_LENGTH = 40  # 40 frames per word sample
+try:
+    import mediapipe.solutions.holistic as mp_holistic
+    import mediapipe.solutions.drawing_utils as mp_drawing
+except ModuleNotFoundError:
+    mp_holistic = mp.solutions.holistic
+    mp_drawing = mp.solutions.drawing_utils
 
-# Ensure dataset directory exists
+DATA_PATH      = 'word_dataset'
+SEQUENCE_LEN   = 40       # hand motion frames
+HAND_FEATURES  = 132      # 126 shape (21 lm * 3 * 2 hands) + 6 wrist-trajectory (3 * 2 hands)
+FACE_FEATURES  = 1404     # 468 face landmarks * 3
+
 os.makedirs(DATA_PATH, exist_ok=True)
 
-def remove_outdated_model():
-    """Deletes the old trained model so predict.py doesn't show old words."""
-    if os.path.exists(MODEL_PATH):
-        try:
-            os.remove(MODEL_PATH)
-            print(f"[!] Removed stale '{MODEL_PATH}'. You will need to retrain via train_words.py.")
-        except Exception as e:
-            print(f"[!] Could not remove '{MODEL_PATH}': {e}")
+# ─── feature helpers ────────────────────────────────────────────────────────
+
+def extract_hand_frame(results):
+    """126 values: left-hand (63) + right-hand (63), wrist-relative."""
+    out = []
+    if results.left_hand_landmarks:
+        w = results.left_hand_landmarks.landmark[0]
+        for lm in results.left_hand_landmarks.landmark:
+            out.extend([lm.x - w.x, lm.y - w.y, lm.z - w.z])
+    else:
+        out.extend([0.0] * 63)
+    if results.right_hand_landmarks:
+        w = results.right_hand_landmarks.landmark[0]
+        for lm in results.right_hand_landmarks.landmark:
+            out.extend([lm.x - w.x, lm.y - w.y, lm.z - w.z])
+    else:
+        out.extend([0.0] * 63)
+    return out   # length 126
+
+
+def get_raw_wrist(results):
+    """Absolute (unshifted) wrist x,y,z for left and right hand, or zeros if absent.
+    Used to build a frame-0-relative trajectory so whole-hand movement (not just
+    finger shape) is captured — required to tell apart signs like 'hello' (wave,
+    fixed shape) from signs that only differ by handshape."""
+    if results.left_hand_landmarks:
+        w = results.left_hand_landmarks.landmark[0]
+        lw = np.array([w.x, w.y, w.z], dtype=np.float32)
+    else:
+        lw = np.zeros(3, dtype=np.float32)
+    if results.right_hand_landmarks:
+        w = results.right_hand_landmarks.landmark[0]
+        rw = np.array([w.x, w.y, w.z], dtype=np.float32)
+    else:
+        rw = np.zeros(3, dtype=np.float32)
+    return lw, rw
+
+
+def build_wrist_trajectory(wrist_frames):
+    """wrist_frames: list of (lw, rw) tuples, len T. Returns (T,6) displacement
+    relative to the first frame each hand was actually detected in (forward-filled
+    across frames where a hand briefly drops out, so missing detections don't
+    register as a fake jump back to the origin)."""
+    arr = np.array([np.concatenate([lw, rw]) for lw, rw in wrist_frames], dtype=np.float32)
+    for col in (slice(0, 3), slice(3, 6)):
+        block = arr[:, col]
+        valid = np.any(block != 0, axis=1)
+        if valid.any():
+            last = block[valid][0]
+            for i in range(len(block)):
+                if valid[i]:
+                    last = block[i]
+                else:
+                    block[i] = last
+            arr[:, col] = block
+    return arr - arr[0]
+
+
+def extract_face_frame(results):
+    """1404 values: 468 face landmarks, nose-relative."""
+    out = []
+    if results.face_landmarks:
+        nose = results.face_landmarks.landmark[1]
+        for lm in results.face_landmarks.landmark:
+            out.extend([lm.x - nose.x, lm.y - nose.y, lm.z - nose.z])
+    else:
+        out.extend([0.0] * 1404)
+    return out   # length 1404
+
+# ─── dataset management ─────────────────────────────────────────────────────
+
+def remove_outdated_models():
+    for p in ['word_motion_model.h5', 'word_face_model.pkl',
+              'word_classes.npy', 'word_model.h5']:
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                print(f"[!] Removed stale '{p}'. Retrain required.")
+            except Exception as e:
+                print(f"[!] Could not remove '{p}': {e}")
+
 
 def reset_single_word(word_name):
-    """Deletes a specific word directory and invalidates the word model."""
     target_dir = os.path.join(DATA_PATH, word_name)
     if os.path.exists(target_dir):
         shutil.rmtree(target_dir)
-        print(f"[✓] Successfully deleted word folder: '{word_name}'")
-        remove_outdated_model()
+        print(f"[OK] Deleted word folder: '{word_name}'")
+        remove_outdated_models()
     else:
-        print(f"[!] Word '{word_name}' not found in '{DATA_PATH}'.")
+        print(f"[!] Word '{word_name}' not found.")
+
 
 def reset_all_words():
-    """Wipes out the entire word dataset and deletes the word model."""
     if os.path.exists(DATA_PATH):
         shutil.rmtree(DATA_PATH)
         os.makedirs(DATA_PATH, exist_ok=True)
-        print("[✓] Successfully reset ALL word datasets.")
-        remove_outdated_model()
-    else:
-        print("[!] Dataset directory does not exist.")
+        print("[OK] Reset ALL word datasets.")
+        remove_outdated_models()
 
-def record_word(word_name, num_samples=15):
-    """Records motion sequences for a specific word using MediaPipe."""
+# ─── recording ──────────────────────────────────────────────────────────────
+
+def record_word(word_name, num_samples=20):
     word_dir = os.path.join(DATA_PATH, word_name)
     os.makedirs(word_dir, exist_ok=True)
 
-    # Count existing sequences
-    existing_files = [f for f in os.listdir(word_dir) if f.endswith('.npy')]
-    start_counter = len(existing_files)
-
-    base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
-    options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=2)
-    detector = vision.HandLandmarker.create_from_options(options)
+    # Count existing samples (pairs: _hand + _face)
+    existing = [f for f in os.listdir(word_dir) if f.endswith('_hand.npy')]
+    start_counter = len(existing)
 
     cap = cv2.VideoCapture(0)
-    print(f"\n--- Recording '{word_name}' ({num_samples} sequences) ---")
-    print("Press SPACE to start recording a sequence. Press 'q' to stop.")
+    print(f"\n--- Recording '{word_name}' ({num_samples} samples) ---")
+    print("SPACE = start recording | Q = stop\n")
 
-    sample_count = 0
-    while sample_count < num_samples:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    FONT = cv2.FONT_HERSHEY_DUPLEX
 
-        frame = cv2.flip(frame, 1)
-        h, w, _ = frame.shape
-        cv2.putText(frame, f"Word: '{word_name}' | Captured: {sample_count}/{num_samples}", 
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, "Press SPACE to record next sample | 'q' to quit", 
-                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    def overlay_panel(frame, text_lines, accent=(0, 200, 100)):
+        H, W = frame.shape[:2]
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (W, 60), (15, 15, 15), -1)
+        cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+        for i, (txt, col, sc) in enumerate(text_lines):
+            cv2.putText(frame, txt, (14, 22 + i * 26), FONT, sc, (0,0,0), 3, cv2.LINE_AA)
+            cv2.putText(frame, txt, (14, 22 + i * 26), FONT, sc, col, 2, cv2.LINE_AA)
 
-        cv2.imshow("Record Word Dataset", frame)
-        key = cv2.waitKey(1) & 0xFF
+    with mp_holistic.Holistic(min_detection_confidence=0.5,
+                               min_tracking_confidence=0.5,
+                               model_complexity=0) as holistic:
+        sample_count = 0
+        while sample_count < num_samples:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.flip(frame, 1)
+            H, W = frame.shape[:2]
 
-        if key == ord('q'):
-            break
-        elif key == 32:  # SPACE KEY pressed
-            sequence = []
-            print(f"  -> Recording sample {sample_count + 1}/{num_samples}... Get ready!")
-            
-            # 3-second countdown visual
-            for c in range(3, 0, -1):
-                temp_ret, temp_frame = cap.read()
-                if temp_ret:
-                    temp_frame = cv2.flip(temp_frame, 1)
-                    cv2.putText(temp_frame, f"Starting in {c}...", (w//2 - 100, h//2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                    cv2.imshow("Record Word Dataset", temp_frame)
-                    cv2.waitKey(1000)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = holistic.process(rgb)
 
-            # Record sequence frames
-            for frame_idx in range(SEQUENCE_LENGTH):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame = cv2.flip(frame, 1)
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-                detection_result = detector.detect(mp_image)
+            if results.left_hand_landmarks:
+                mp_drawing.draw_landmarks(frame, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=(80,255,140), thickness=2, circle_radius=3),
+                    mp_drawing.DrawingSpec(color=(0,180,80),   thickness=2))
+            if results.right_hand_landmarks:
+                mp_drawing.draw_landmarks(frame, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=(255,100,80), thickness=2, circle_radius=3),
+                    mp_drawing.DrawingSpec(color=(200,50,30),  thickness=2))
+            if results.face_landmarks:
+                mp_drawing.draw_landmarks(frame, results.face_landmarks, mp_holistic.FACEMESH_CONTOURS,
+                    landmark_drawing_spec=None,
+                    connection_drawing_spec=mp_drawing.DrawingSpec(color=(60,60,60), thickness=1))
 
-                combined_landmarks = []
-                if detection_result.hand_landmarks:
-                    hands = detection_result.hand_landmarks
-                    primary_hand = hands[0]
-                    wrist_x, wrist_y, wrist_z = primary_hand[0].x, primary_hand[0].y, primary_hand[0].z
+            # Status bar
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (W, 58), (15,15,15), -1)
+            cv2.addWeighted(overlay, 0.60, frame, 0.40, 0, frame)
+            info = f"Word: '{word_name}'   Captured: {sample_count}/{num_samples}"
+            cv2.putText(frame, info, (14, 34), FONT, 0.7, (0,0,0), 3, cv2.LINE_AA)
+            cv2.putText(frame, info, (14, 34), FONT, 0.7, (0,220,100), 2, cv2.LINE_AA)
+            hint = "SPACE = Record   Q = Quit"
+            cv2.putText(frame, hint, (14, H - 18), FONT, 0.5, (130,130,130), 1, cv2.LINE_AA)
 
-                    for hand_idx in range(2):
-                        if hand_idx < len(hands):
-                            for lm in hands[hand_idx]:
-                                combined_landmarks.extend([lm.x - wrist_x, lm.y - wrist_y, lm.z - wrist_z])
-                        else:
-                            combined_landmarks.extend([0.0] * 63)
-                else:
-                    combined_landmarks = [0.0] * 126
+            cv2.imshow("FSL Word Collector", frame)
+            key = cv2.waitKey(1) & 0xFF
 
-                sequence.append(combined_landmarks)
+            if key == ord('q') or key == ord('Q'):
+                break
 
-                cv2.putText(frame, f"RECORDING ({frame_idx + 1}/{SEQUENCE_LENGTH})", 
-                            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                cv2.imshow("Record Word Dataset", frame)
-                cv2.waitKey(30)
+            elif key == 32:  # SPACE -> record a sample
+                # ── 3-second countdown ──────────────────────────────────
+                for c in range(3, 0, -1):
+                    ret2, f2 = cap.read()
+                    if ret2:
+                        f2 = cv2.flip(f2, 1)
+                        H2, W2 = f2.shape[:2]
+                        ov = f2.copy()
+                        cv2.rectangle(ov, (0,0), (W2, H2), (10,10,10), -1)
+                        cv2.addWeighted(ov, 0.45, f2, 0.55, 0, f2)
+                        cv2.putText(f2, str(c), (W2//2 - 30, H2//2 + 20),
+                                    FONT, 4.0, (0,0,0), 8, cv2.LINE_AA)
+                        cv2.putText(f2, str(c), (W2//2 - 30, H2//2 + 20),
+                                    FONT, 4.0, (0,220,255), 5, cv2.LINE_AA)
+                        cv2.imshow("FSL Word Collector", f2)
+                        cv2.waitKey(1000)
 
-            if len(sequence) == SEQUENCE_LENGTH:
-                file_name = f"{start_counter + sample_count}.npy"
-                np.save(os.path.join(word_dir, file_name), np.array(sequence))
-                print(f"  [✓] Saved sample: {file_name}")
-                sample_count += 1
+                # ── Record SEQUENCE_LEN frames ──────────────────────────
+                hand_seq   = []
+                face_list  = []
+                wrist_seq  = []
+                ok = True
+
+                for frame_idx in range(SEQUENCE_LEN):
+                    ret3, f3 = cap.read()
+                    if not ret3:
+                        ok = False
+                        break
+                    f3 = cv2.flip(f3, 1)
+                    H3, W3 = f3.shape[:2]
+                    rgb3 = cv2.cvtColor(f3, cv2.COLOR_BGR2RGB)
+                    res3 = holistic.process(rgb3)
+
+                    hand_seq.append(extract_hand_frame(res3))
+                    face_list.append(extract_face_frame(res3))
+                    wrist_seq.append(get_raw_wrist(res3))
+
+                    # Draw landmarks while recording
+                    if res3.left_hand_landmarks:
+                        mp_drawing.draw_landmarks(f3, res3.left_hand_landmarks,
+                            mp_holistic.HAND_CONNECTIONS,
+                            mp_drawing.DrawingSpec(color=(80,255,140), thickness=2, circle_radius=3),
+                            mp_drawing.DrawingSpec(color=(0,180,80), thickness=2))
+                    if res3.right_hand_landmarks:
+                        mp_drawing.draw_landmarks(f3, res3.right_hand_landmarks,
+                            mp_holistic.HAND_CONNECTIONS,
+                            mp_drawing.DrawingSpec(color=(255,100,80), thickness=2, circle_radius=3),
+                            mp_drawing.DrawingSpec(color=(200,50,30), thickness=2))
+                    if res3.face_landmarks:
+                        mp_drawing.draw_landmarks(f3, res3.face_landmarks,
+                            mp_holistic.FACEMESH_CONTOURS,
+                            landmark_drawing_spec=None,
+                            connection_drawing_spec=mp_drawing.DrawingSpec(color=(60,60,60), thickness=1))
+
+                    # Recording HUD
+                    ov3 = f3.copy()
+                    cv2.rectangle(ov3, (0,0), (W3, 58), (15,15,15), -1)
+                    cv2.addWeighted(ov3, 0.60, f3, 0.40, 0, f3)
+                    rec_txt = f"RECORDING  {frame_idx+1}/{SEQUENCE_LEN}"
+                    cv2.putText(f3, rec_txt, (14, 36), FONT, 0.8, (0,0,0), 3, cv2.LINE_AA)
+                    cv2.putText(f3, rec_txt, (14, 36), FONT, 0.8, (0,0,255), 2, cv2.LINE_AA)
+
+                    # Progress bar
+                    bar_w = int((W3 - 28) * (frame_idx + 1) / SEQUENCE_LEN)
+                    cv2.rectangle(f3, (14, H3-18), (W3-14, H3-8), (50,50,50), -1)
+                    cv2.rectangle(f3, (14, H3-18), (14+bar_w, H3-8), (0,0,220), -1)
+
+                    cv2.imshow("FSL Word Collector", f3)
+                    cv2.waitKey(30)
+
+                if ok and len(hand_seq) == SEQUENCE_LEN:
+                    idx    = start_counter + sample_count
+                    h_path = os.path.join(word_dir, f"{idx}_hand.npy")
+                    f_path = os.path.join(word_dir, f"{idx}_face.npy")
+
+                    # hand_seq   -> (40, 126) shape features
+                    # traj       -> (40, 6)   wrist trajectory (whole-hand movement path)
+                    # full_hand  -> (40, 132) saved to disk
+                    # face_list  -> averaged to (1404,) static signature
+                    # face_seq   -> (40, 1404) full facial expression motion
+                    traj = build_wrist_trajectory(wrist_seq)
+                    full_hand = np.concatenate(
+                        [np.array(hand_seq, dtype=np.float32), traj], axis=1)
+
+                    np.save(h_path, full_hand.astype(np.float32))
+                    np.save(f_path, np.mean(np.array(face_list, dtype=np.float32), axis=0))
+                    np.save(os.path.join(word_dir, f"{idx}_face_seq.npy"),
+                            np.array(face_list, dtype=np.float32))
+
+                    print(f"  [OK] Saved sample {idx}: hand_shape={hand_seq[0][:3]}... "
+                          f"traj_end={traj[-1]} face=avg")
+                    sample_count += 1
+
+                    # Flash confirmation
+                    ret4, f4 = cap.read()
+                    if ret4:
+                        f4 = cv2.flip(f4, 1)
+                        H4, W4 = f4.shape[:2]
+                        ov4 = f4.copy()
+                        cv2.rectangle(ov4, (0,0), (W4,H4), (0,120,0), -1)
+                        cv2.addWeighted(ov4, 0.25, f4, 0.75, 0, f4)
+                        done_txt = f"Saved! ({sample_count}/{num_samples})"
+                        cv2.putText(f4, done_txt, (14, H4//2), FONT, 1.2, (0,0,0), 4, cv2.LINE_AA)
+                        cv2.putText(f4, done_txt, (14, H4//2), FONT, 1.2, (0,255,100), 3, cv2.LINE_AA)
+                        cv2.imshow("FSL Word Collector", f4)
+                        cv2.waitKey(600)
 
     cap.release()
     cv2.destroyAllWindows()
+    remove_outdated_models()
+    print(f"\n[OK] Done recording '{word_name}'. Total samples: {start_counter + sample_count}")
+
+# ─── main menu ──────────────────────────────────────────────────────────────
 
 def main():
     while True:
-        existing_words = [d for d in os.listdir(DATA_PATH) if os.path.isdir(os.path.join(DATA_PATH, d))]
+        words = [d for d in os.listdir(DATA_PATH)
+                 if os.path.isdir(os.path.join(DATA_PATH, d))]
+        counts = {}
+        for w in words:
+            wd = os.path.join(DATA_PATH, w)
+            counts[w] = len([f for f in os.listdir(wd) if f.endswith('_hand.npy')])
+
         print("\n==========================================")
-        print("  FSL WORD DATASET COLLECTOR & MANAGER")
+        print("  FSL WORD DATASET COLLECTOR  (Dual-Gate)")
         print("==========================================")
-        print(f"Current Recorded Words: {existing_words if existing_words else 'None'}")
-        print("1. Record / Add a Word")
-        print("2. Reset / Delete a Specific Word")
-        print("3. Reset ALL Words (Clear Dataset)")
+        if words:
+            for w, c in counts.items():
+                print(f"  {w:20s}  {c} samples")
+        else:
+            print("  No words recorded yet.")
+        print("\n1. Record / Add samples for a word")
+        print("2. Delete a specific word")
+        print("3. Delete ALL words")
         print("4. Exit")
-        
-        choice = input("Select an option (1-4): ").strip()
+
+        choice = input("\nSelect (1-4): ").strip()
 
         if choice == '1':
-            word_name = input("Enter the word label to record (e.g., 'hello', 'thank_you'): ").strip().lower()
-            if word_name:
-                num_samples = input("Number of samples to capture (default 15): ").strip()
-                num_samples = int(num_samples) if num_samples.isdigit() else 15
-                record_word(word_name, num_samples)
+            wn = input("Word label (e.g. hello, thank_you): ").strip().lower()
+            if wn:
+                ns = input("Number of samples (default 20): ").strip()
+                ns = int(ns) if ns.isdigit() else 20
+                record_word(wn, ns)
         elif choice == '2':
-            word_name = input("Enter the word label you want to DELETE: ").strip().lower()
-            if word_name:
-                reset_single_word(word_name)
+            wn = input("Word to DELETE: ").strip().lower()
+            if wn:
+                reset_single_word(wn)
         elif choice == '3':
-            confirm = input("Are you sure you want to DELETE ALL WORDS? (y/n): ").strip().lower()
-            if confirm == 'y':
+            c = input("Delete ALL words? (y/n): ").strip().lower()
+            if c == 'y':
                 reset_all_words()
         elif choice == '4':
-            print("Exiting collector menu.")
             break
         else:
-            print("Invalid option. Please enter 1, 2, 3, or 4.")
+            print("Invalid option.")
 
 if __name__ == '__main__':
     main()

@@ -8,3 +8,4 @@ gTTS
 flask
 flask-socketio
 mysql-connector-python
+tensorflow
