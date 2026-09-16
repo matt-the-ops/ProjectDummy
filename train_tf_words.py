@@ -1,4 +1,4 @@
-﻿import os
+import os
 import pickle
 import numpy as np
 import tensorflow as tf
@@ -221,8 +221,6 @@ def train_motion_model(X_hand, y, classes):
 # ── Face Model (PCA + LogisticRegression on face signature) ────────────
 def train_face_model(X_face, y, classes):
     print("\n=== Training FACE SIGNATURE Model (PCA+LogReg) ===")
-    n = min(30, X_face.shape[0] - 1)  # PCA components, capped by samples
-    n = max(2, n)
 
     try:
         Xtr, Xte, ytr, yte = train_test_split(X_face, y, test_size=0.2,
@@ -230,6 +228,8 @@ def train_face_model(X_face, y, classes):
     except ValueError:
         Xtr, Xte, ytr, yte = train_test_split(X_face, y, test_size=0.2,
                                                random_state=42)
+
+    n = max(1, min(30, Xtr.shape[0] - 1))  # PCA components, capped by training samples
 
     face_pipeline = Pipeline([
         ('scaler', StandardScaler()),

@@ -61,14 +61,11 @@ except FileNotFoundError:
 
 # ─────────────────────────────────────────────
 #  Load Mode 2: Dual-Gate Word Models
-#  Gate 1 - Hand Motion LSTM (word_motion_model.h5)
-#  Gate 2 - Face Signature RF (word_face_model.pkl)
 # ─────────────────────────────────────────────
 motion_model = None
 face_clf     = None
 word_classes = None
 
-# Try new dual-gate models first
 if os.path.exists('word_motion_model.h5') and \
    os.path.exists('word_face_model.pkl') and \
    os.path.exists('word_classes.npy'):
@@ -86,27 +83,23 @@ if os.path.exists('word_motion_model.h5') and \
 else:
     DUAL_GATE_MODE = False
     print("[!] Dual-gate models not found.")
-    # Fall back to legacy single model
     if os.path.exists('word_model.h5') and os.path.exists('word_classes.npy'):
         try:
             motion_model = load_model('word_model.h5')
             word_classes = np.load('word_classes.npy', allow_pickle=True)
-            print(f"[OK] Legacy word model loaded (single-gate). Classes: {word_classes}")
+            print(f"[OK] Legacy word model loaded. Classes: {word_classes}")
         except Exception as e:
             print(f"[!] Legacy word model error: {e}")
     else:
-        print("[!] No word model found. Mode 2 unavailable. Train with train_tf_words.py first.")
+        print("[!] No word model found. Mode 2 unavailable.")
 
 # ─────────────────────────────────────────────
-#  Feature Extraction Helpers (MUST mirror collect_data_words.py /
-#  train_tf_words.py exactly, or the model gets data it was never
-#  trained on and predictions become meaningless).
+#  Feature Extraction Helpers
 # ─────────────────────────────────────────────
-HAND_FEATURES = 132   # 126 shape + 6 wrist-trajectory
+HAND_FEATURES = 132
 FACE_FEATURES = 1404
 
 def extract_hand_frame(results):
-    """126 values: left-hand (63) + right-hand (63), wrist-relative shape."""
     out = []
     if results.left_hand_landmarks:
         w = results.left_hand_landmarks.landmark[0]
@@ -123,7 +116,6 @@ def extract_hand_frame(results):
     return out
 
 def get_raw_wrist(results):
-    """Absolute wrist x,y,z for left/right hand, or zeros if absent."""
     if results.left_hand_landmarks:
         w = results.left_hand_landmarks.landmark[0]
         lw = np.array([w.x, w.y, w.z], dtype=np.float32)
@@ -137,9 +129,6 @@ def get_raw_wrist(results):
     return lw, rw
 
 def build_wrist_trajectory(wrist_frames):
-    """List of (lw, rw) -> (T,6) displacement relative to first-detected
-    frame per hand, forward-filling brief dropouts. Identical logic to
-    collect_data_words.py so live trajectory matches training data."""
     arr = np.array([np.concatenate([lw, rw]) for lw, rw in wrist_frames], dtype=np.float32)
     for col in (slice(0, 3), slice(3, 6)):
         block = arr[:, col]
@@ -155,9 +144,6 @@ def build_wrist_trajectory(wrist_frames):
     return arr - arr[0]
 
 def normalize_hand_sequence(hand_seq):
-    """EXACT copy of train_tf_words.py's normalize_hand_sequence. Must never
-    drift out of sync with training — that mismatch is what was breaking
-    word detection before."""
     seq = np.asarray(hand_seq, dtype=np.float32)
     if seq.size == 0:
         return seq
@@ -177,7 +163,6 @@ def normalize_hand_sequence(hand_seq):
     return out
 
 def extract_face_frame(results):
-    """1404 values: 468 face landmarks, nose-relative."""
     out = []
     if results.face_landmarks:
         nose = results.face_landmarks.landmark[1]
@@ -187,10 +172,6 @@ def extract_face_frame(results):
         out.extend([0.0] * 1404)
     return out
 
-# Legacy combined extractor (for fallback single-gate mode)
-def extract_combined_landmarks(results):
-    return extract_hand_frame(results) + extract_face_frame(results)
-
 # ─────────────────────────────────────────────
 #  Drawing Helpers
 # ─────────────────────────────────────────────
@@ -199,7 +180,6 @@ ACCENT_LETTER = (0,  220, 100)
 ACCENT_WORD   = (140,  60, 255)
 ACCENT_MOTION = (0,  200, 255)
 ACCENT_WARN   = (0,   90, 255)
-ACCENT_GATE   = (255, 180,   0)
 TEXT_PRIMARY  = (240, 240, 240)
 TEXT_DIM      = (140, 140, 140)
 
@@ -232,7 +212,7 @@ def draw_progress_bar(img, x, y, w, h, value, max_val, bar_color, bg=(50,50,50))
     cv2.rectangle(img, (x, y), (x+w, y+h), (80,80,80), 1)
 
 # ─────────────────────────────────────────────
-#  State -- Mode 1 (Letters)
+#  State -- Mode 1 & 2
 # ─────────────────────────────────────────────
 LETTER_BUFFER_SIZE  = 12
 STABILIZATION_DELAY = 2.5
@@ -253,33 +233,25 @@ MOTION_GRACE_FRAMES = 8
 suppress_char       = ""
 suppression_end     = 0.0
 
-# ─────────────────────────────────────────────
-#  State -- Mode 2 (Words, Dual-Gate)
-# ─────────────────────────────────────────────
+# Word State (Dual-Gate)
 WORD_SEQ_LEN        = 40
-MOTION_CONF_THRESH  = 0.55   # Gate 1: hand motion must be this confident
-FACE_CONF_THRESH    = 0.50   # Gate 2: face signature must agree
-MOTION_MARGIN_THRESH = 0.15  # top prediction must beat runner-up by this much
-MIN_MOTION_ENERGY    = 0.015 # mean per-frame shape movement; below = "not signing"
+MOTION_CONF_THRESH  = 0.45
+FACE_CONF_THRESH    = 0.35
+MOTION_MARGIN_THRESH = 0.08
+MIN_MOTION_ENERGY    = 0.005
 
-# Separate buffers for hand and face (run in parallel, same length)
 hand_sequence_buffer  = collections.deque(maxlen=WORD_SEQ_LEN)
-wrist_sequence_buffer = collections.deque(maxlen=WORD_SEQ_LEN)  # raw wrist per frame
-face_sequence_buffer  = collections.deque(maxlen=WORD_SEQ_LEN)  # accumulates face frames
+wrist_sequence_buffer = collections.deque(maxlen=WORD_SEQ_LEN)
+face_sequence_buffer  = collections.deque(maxlen=WORD_SEQ_LEN)
 
-# Live debug info
 debug_motion_word = "--"
 debug_motion_conf = 0.0
 debug_face_word   = "--"
 debug_face_conf   = 0.0
-gate_status       = "WAITING"   # WAITING | AGREE | DISAGREE
+gate_status       = "WAITING"
 
-# ─────────────────────────────────────────────
-#  Shared State
-# ─────────────────────────────────────────────
 current_mode      = 1
 typed_output      = ""
-last_appended     = ""
 missing_frames    = 0
 camera_index      = 0
 
@@ -293,15 +265,12 @@ def set_notification(msg):
     notification_end  = time.time() + NOTIF_DURATION
 
 # ─────────────────────────────────────────────
-#  Camera
+#  Camera Setup
 # ─────────────────────────────────────────────
 cap = cv2.VideoCapture(camera_index)
 print("\n[STARTED] FSL Dual-Gate Translator")
 print("Controls: 1=Letters  2=Words  N=Cam  Enter=Speak  Space  Bksp  C=Clear  Q=Quit\n")
 
-# ─────────────────────────────────────────────
-#  Main Loop
-# ─────────────────────────────────────────────
 with mp_holistic.Holistic(
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
@@ -334,113 +303,124 @@ with mp_holistic.Holistic(
         current_frame_prediction = ""
 
         # ══════════════════════════════════════════════════════
-        #  MODE 2: DUAL-GATE WORD RECOGNITION
+        #  MODE 2: DUAL-GATE WORD RECOGNITION (Sliding Window)
+        # ══════════════════════════════════════════════════════
+        # ══════════════════════════════════════════════════════
+        #  MODE 2: DUAL-GATE WORD RECOGNITION (Sliding Window)
         # ══════════════════════════════════════════════════════
         if current_mode == 2:
-            if primary_hand is not None and motion_model is not None:
-                missing_frames = 0
+            if motion_model is not None:
+                has_hand = (results.left_hand_landmarks is not None) or (results.right_hand_landmarks is not None)
 
-                # Collect hand shape, wrist trajectory, AND face features every frame
-                hand_sequence_buffer.append(extract_hand_frame(results))
-                wrist_sequence_buffer.append(get_raw_wrist(results))
-                face_sequence_buffer.append(extract_face_frame(results))
+                if has_hand:
+                    missing_frames = 0
+                else:
+                    missing_frames += 1
 
-                buf_len = len(hand_sequence_buffer)
+                if missing_frames > 25:
+                    hand_sequence_buffer.clear()
+                    wrist_sequence_buffer.clear()
+                    face_sequence_buffer.clear()
+                    debug_motion_word = "--"
+                    debug_motion_conf = 0.0
+                    debug_face_word   = "--"
+                    debug_face_conf   = 0.0
+                    gate_status       = "WAITING"
+                else:
+                    hand_sequence_buffer.append(extract_hand_frame(results))
+                    wrist_sequence_buffer.append(get_raw_wrist(results))
+                    face_sequence_buffer.append(extract_face_frame(results))
 
-                if buf_len == WORD_SEQ_LEN and not on_cooldown:
+                    buf_len = len(hand_sequence_buffer)
 
-                    # ── Motion-energy gate: skip idle/resting hands ────────
-                    # A near-static hand carries no sign; running the model on
-                    # it just produces noisy, overconfident-looking guesses.
-                    shape_arr     = np.array(hand_sequence_buffer, dtype=np.float32)
-                    frame_diffs   = np.diff(shape_arr, axis=0)
-                    motion_energy = float(np.mean(np.linalg.norm(frame_diffs, axis=1)))
+                    if buf_len == WORD_SEQ_LEN and not on_cooldown:
+                        shape_arr     = np.array(hand_sequence_buffer, dtype=np.float32)
+                        frame_diffs   = np.diff(shape_arr, axis=0)
+                        motion_energy = float(np.mean(np.linalg.norm(frame_diffs, axis=1)))
 
-                    if motion_energy < MIN_MOTION_ENERGY:
-                        gate_status = "NO MOTION"
-                        hand_sequence_buffer.clear()
-                        wrist_sequence_buffer.clear()
-                        face_sequence_buffer.clear()
-
-                    else:
-                        # ── Gate 1: Hand Motion LSTM ────────────────────────
-                        # Build the exact 132-dim, normalized feature the model
-                        # was trained on: shape + wrist trajectory, scaled by
-                        # each hand's own span (must match train_tf_words.py).
-                        traj      = build_wrist_trajectory(list(wrist_sequence_buffer))
-                        full_hand = np.concatenate([shape_arr, traj], axis=1)
-                        hand_norm = normalize_hand_sequence(full_hand)
-                        hand_arr  = np.expand_dims(hand_norm, axis=0)
-
-                        mot_preds  = motion_model.predict(hand_arr, verbose=0)[0]
-                        sorted_idx = np.argsort(mot_preds)[::-1]
-                        mot_idx    = int(sorted_idx[0])
-                        mot_conf   = float(mot_preds[mot_idx])
-                        mot_margin = (mot_conf - float(mot_preds[sorted_idx[1]])
-                                      if len(sorted_idx) > 1 else mot_conf)
-
-                        debug_motion_word = str(word_classes[mot_idx])
-                        debug_motion_conf = mot_conf * 100.0
-
-                        mot_pass = (mot_conf >= MOTION_CONF_THRESH and
-                                    mot_margin >= MOTION_MARGIN_THRESH)
-
-                        if DUAL_GATE_MODE and face_clf is not None:
-                            # ── Gate 2: Face Signature model ────────────────
-                            # Average accumulated face frames -> static signature
-                            # (matches training: face_static = mean of 40 face frames)
-                            face_avg  = np.mean(np.array(face_sequence_buffer, dtype=np.float32), axis=0)
-                            face_snap = face_avg.reshape(1, -1)
-
-                            face_proba = face_clf.predict_proba(face_snap)[0]
-                            face_idx   = int(np.argmax(face_proba))
-                            face_conf  = float(face_proba[face_idx])
-
-                            debug_face_word = str(word_classes[face_idx])
-                            debug_face_conf = face_conf * 100.0
-
-                            # ── Dual-Gate Decision ──────────────────────────
-                            # Both gates must point at the same word, pass their
-                            # confidence thresholds, AND motion must clearly beat
-                            # the runner-up (kills "hello" vs "what" ambiguity).
-                            if mot_idx == face_idx and mot_pass and face_conf >= FACE_CONF_THRESH:
-                                gate_status  = "AGREE"
-                                output_word  = str(word_classes[mot_idx])
-                                typed_output        += output_word + " "
-                                global_cooldown_end  = current_time + GLOBAL_COOLDOWN
-                                hand_sequence_buffer.clear()
-                                wrist_sequence_buffer.clear()
-                                face_sequence_buffer.clear()
-                                speak_text(output_word)
-                                set_notification("OK: " + output_word)
-                            else:
-                                gate_status = "DISAGREE" if mot_idx != face_idx else "LOW CONF"
-                                hand_sequence_buffer.clear()
-                                wrist_sequence_buffer.clear()
-                                face_sequence_buffer.clear()
-
+                        if motion_energy < MIN_MOTION_ENERGY:
+                            gate_status = "NO MOTION"
+                            # Slide window forward by 8 frames instead of wiping clean
+                            for _ in range(8):
+                                if hand_sequence_buffer: hand_sequence_buffer.popleft()
+                                if wrist_sequence_buffer: wrist_sequence_buffer.popleft()
+                                if face_sequence_buffer: face_sequence_buffer.popleft()
                         else:
-                            # Legacy single-gate (no face model loaded)
-                            debug_face_word = "--"
-                            debug_face_conf = 0.0
-                            if mot_pass:
-                                gate_status  = "SINGLE-OK"
-                                output_word  = str(word_classes[mot_idx])
-                                typed_output        += output_word + " "
-                                global_cooldown_end  = current_time + GLOBAL_COOLDOWN
+                            traj      = build_wrist_trajectory(list(wrist_sequence_buffer))
+                            full_hand = np.concatenate([shape_arr, traj], axis=1)
+                            hand_norm = normalize_hand_sequence(full_hand)
+                            hand_arr  = np.expand_dims(hand_norm, axis=0)
+
+                            mot_preds  = motion_model.predict(hand_arr, verbose=0)[0]
+                            sorted_idx = np.argsort(mot_preds)[::-1]
+                            mot_idx    = int(sorted_idx[0])
+                            mot_conf   = float(mot_preds[mot_idx])
+                            mot_margin = (mot_conf - float(mot_preds[sorted_idx[1]])
+                                          if len(sorted_idx) > 1 else mot_conf)
+
+                            debug_motion_word = str(word_classes[mot_idx])
+                            debug_motion_conf = mot_conf * 100.0
+
+                            mot_pass = (mot_conf >= MOTION_CONF_THRESH and
+                                        mot_margin >= MOTION_MARGIN_THRESH)
+
+                            face_pass = False
+                            face_idx = -1
+                            face_conf = 0.0
+
+                            if DUAL_GATE_MODE and face_clf is not None:
+                                face_avg  = np.mean(np.array(face_sequence_buffer, dtype=np.float32), axis=0)
+                                face_snap = face_avg.reshape(1, -1)
+
+                                try:
+                                    face_proba = face_clf.predict_proba(face_snap)[0]
+                                    face_idx   = int(np.argmax(face_proba))
+                                    face_conf  = float(face_proba[face_idx])
+
+                                    debug_face_word = str(word_classes[face_idx])
+                                    debug_face_conf = face_conf * 100.0
+                                    face_pass = (face_conf >= FACE_CONF_THRESH)
+                                except Exception:
+                                    debug_face_word = "--"
+                                    debug_face_conf = 0.0
+
+                            # Decision Gate Logic
+                            if DUAL_GATE_MODE and face_clf is not None:
+                                if mot_idx == face_idx and mot_pass and face_pass:
+                                    gate_status = "AGREE"
+                                    accept_pred = True
+                                elif mot_conf >= 0.65 and mot_margin >= MOTION_MARGIN_THRESH:
+                                    gate_status = "MOTION-OK"
+                                    accept_pred = True
+                                else:
+                                    gate_status = "DISAGREE" if mot_idx != face_idx else "LOW CONF"
+                                    accept_pred = False
+                            else:
+                                if mot_pass:
+                                    gate_status = "SINGLE-OK"
+                                    accept_pred = True
+                                else:
+                                    gate_status = "LOW CONF"
+                                    accept_pred = False
+
+                            if accept_pred:
+                                output_word = str(word_classes[mot_idx])
+                                typed_output += output_word + " "
+                                global_cooldown_end = current_time + GLOBAL_COOLDOWN
                                 hand_sequence_buffer.clear()
                                 wrist_sequence_buffer.clear()
                                 face_sequence_buffer.clear()
                                 speak_text(output_word)
                                 set_notification("OK: " + output_word)
                             else:
-                                gate_status = "LOW CONF"
-                                hand_sequence_buffer.clear()
-                                wrist_sequence_buffer.clear()
-                                face_sequence_buffer.clear()
+                                # Slide window smoothly instead of clearing
+                                for _ in range(8):
+                                    if hand_sequence_buffer: hand_sequence_buffer.popleft()
+                                    if wrist_sequence_buffer: wrist_sequence_buffer.popleft()
+                                    if face_sequence_buffer: face_sequence_buffer.popleft()
             else:
                 missing_frames += 1
-                if missing_frames > 15:
+                if missing_frames > 25:
                     hand_sequence_buffer.clear()
                     wrist_sequence_buffer.clear()
                     face_sequence_buffer.clear()
@@ -456,8 +436,6 @@ with mp_holistic.Holistic(
         elif current_mode == 1:
             if primary_hand is not None:
                 missing_frames = 0
-
-                # ── 1. ML Letter Prediction ───────────────────────────────
                 wrist_x, wrist_y, wrist_z = primary_hand[0].x, primary_hand[0].y, primary_hand[0].z
                 scale = math.sqrt(
                     (primary_hand[9].x - wrist_x)**2 +
@@ -473,7 +451,6 @@ with mp_holistic.Holistic(
                 prediction_buffer.append(raw_ml_char)
                 base_sign = collections.Counter(prediction_buffer).most_common(1)[0][0]
 
-                # ── 2. Motion State Machine (J & Z) ──────────────────────
                 pinky_pos = (int(primary_hand[20].x * W), int(primary_hand[20].y * H))
                 index_pos = (int(primary_hand[8].x  * W), int(primary_hand[8].y  * H))
 
@@ -515,9 +492,7 @@ with mp_holistic.Holistic(
                             (index_pos[1]-index_history[-1][1])**2 > MIN_MOVE_SQ):
                         index_history.append(index_pos)
 
-                # ── 3. Motion Trigger ─────────────────────────────────────
                 motion_triggered, motion_char = False, ""
-
                 if motion_state == "J_TRACKING" and len(pinky_history) >= 8:
                     highest_y = min(p[1] for p in pinky_history)
                     if pinky_history[-1][1] - highest_y > 45:
@@ -527,7 +502,6 @@ with mp_holistic.Holistic(
                             suppression_end = current_time + 1.2
                         motion_state = ""
                         pinky_history.clear()
-
                 elif motion_state == "Z_TRACKING" and len(index_history) >= 8:
                     min_x = min(p[0] for p in index_history)
                     max_x = max(p[0] for p in index_history)
@@ -539,9 +513,7 @@ with mp_holistic.Holistic(
                         motion_state = ""
                         index_history.clear()
 
-                # ── 4. Static Letter Hold ─────────────────────────────────
                 letter_triggered, letter_char = False, ""
-
                 if not motion_triggered:
                     candidate = base_sign
                     if current_time < suppression_end and candidate == suppress_char:
@@ -556,23 +528,18 @@ with mp_holistic.Holistic(
                             stable_start_time = current_time
                     current_frame_prediction = last_stable_char
 
-                # ── 5. Commit Output ──────────────────────────────────────
                 if motion_triggered and motion_char and not on_cooldown:
                     typed_output        += motion_char
                     global_cooldown_end  = current_time + GLOBAL_COOLDOWN
                     stable_start_time    = current_time + GLOBAL_COOLDOWN
-                    last_appended        = motion_char
                     speak_text(motion_char)
                     set_notification("OK: " + motion_char + " (motion)")
-
                 elif letter_triggered and letter_char and not on_cooldown:
                     typed_output        += letter_char
                     global_cooldown_end  = current_time + GLOBAL_COOLDOWN
                     stable_start_time    = current_time + GLOBAL_COOLDOWN
-                    last_appended        = letter_char
                     speak_text(letter_char)
                     set_notification("OK: " + letter_char)
-
             else:
                 missing_frames += 1
                 if missing_frames > 10:
@@ -601,27 +568,13 @@ with mp_holistic.Holistic(
                 mp_drawing.DrawingSpec(color=(255,100,80), thickness=2, circle_radius=3),
                 mp_drawing.DrawingSpec(color=(200,50,30),  thickness=2))
 
-        # Gradient motion trails (Mode 1)
-        if current_mode == 1:
-            if motion_state == "J_TRACKING":
-                for i in range(1, len(pinky_history)):
-                    t = i / max(len(pinky_history)-1, 1)
-                    cv2.line(frame, pinky_history[i-1], pinky_history[i],
-                             (int(255*(1-t)), int(220*t), 255), 4, cv2.LINE_AA)
-            elif motion_state == "Z_TRACKING":
-                for i in range(1, len(index_history)):
-                    t = i / max(len(index_history)-1, 1)
-                    cv2.line(frame, index_history[i-1], index_history[i],
-                             (255, int(200*(1-t)), int(255*t)), 4, cv2.LINE_AA)
-
         # ══════════════════════════════════════════════════════
-        #  HUD / UI
+        #  HUD / UI Rendering
         # ══════════════════════════════════════════════════════
         mode_accent = ACCENT_LETTER if current_mode == 1 else ACCENT_WORD
         FONT        = cv2.FONT_HERSHEY_SIMPLEX
         FONT_MONO   = cv2.FONT_HERSHEY_DUPLEX
 
-        # ── Top Bar ──────────────────────────────────────────────────────
         draw_panel(frame, 0, 0, W, 58)
         mode_label = "[ LETTERS ]" if current_mode == 1 else "[  WORDS  ]"
         put_text_shadow(frame, mode_label, (14, 38), FONT_MONO, 0.85, mode_accent, 2)
@@ -630,80 +583,52 @@ with mp_holistic.Holistic(
         (cw, _), _ = cv2.getTextSize(cam_txt, FONT, 0.55, 1)
         put_text_shadow(frame, cam_txt, (W-cw-14, 36), FONT, 0.55, TEXT_DIM, 1)
 
-        # ── Left Panel (Mode 1) ───────────────────────────────────────────
         if current_mode == 1:
             panel_x, panel_y, panel_w, panel_h = 10, 65, 200, 130
             draw_panel(frame, panel_x, panel_y, panel_w, panel_h)
-            cv2.rectangle(frame, (panel_x, panel_y),
-                          (panel_x+panel_w, panel_y+panel_h), mode_accent, 1)
+            cv2.rectangle(frame, (panel_x, panel_y), (panel_x+panel_w, panel_y+panel_h), mode_accent, 1)
 
             sign_display = current_frame_prediction if current_frame_prediction else "?"
-            put_text_shadow(frame, sign_display, (panel_x+14, panel_y+70),
-                            FONT_MONO, 2.8, mode_accent, 5)
+            put_text_shadow(frame, sign_display, (panel_x+14, panel_y+70), FONT_MONO, 2.8, mode_accent, 5)
 
             if current_frame_prediction and not on_cooldown and current_time >= suppression_end:
                 held = current_time - stable_start_time
-                draw_progress_bar(frame, panel_x+10, panel_y+100, panel_w-20, 10,
-                                  held, STABILIZATION_DELAY, ACCENT_LETTER)
-                pct = int(min(held/STABILIZATION_DELAY,1.0)*100)
-                put_text_shadow(frame, "Hold "+str(pct)+"%",
-                                (panel_x+10, panel_y+126), FONT, 0.42, TEXT_DIM, 1)
+                draw_progress_bar(frame, panel_x+10, panel_y+100, panel_w-20, 10, held, STABILIZATION_DELAY, ACCENT_LETTER)
             elif on_cooldown:
                 left = global_cooldown_end - current_time
-                draw_progress_bar(frame, panel_x+10, panel_y+100, panel_w-20, 10,
-                                  GLOBAL_COOLDOWN-left, GLOBAL_COOLDOWN, ACCENT_WARN)
-                put_text_shadow(frame, "Cooldown "+str(round(left,1))+"s",
-                                (panel_x+10, panel_y+126), FONT, 0.42, ACCENT_WARN, 1)
+                draw_progress_bar(frame, panel_x+10, panel_y+100, panel_w-20, 10, GLOBAL_COOLDOWN-left, GLOBAL_COOLDOWN, ACCENT_WARN)
 
-            if motion_state:
-                badge = "J -- TRACKING" if motion_state == "J_TRACKING" else "Z -- TRACKING"
-                bx, by = panel_x, panel_y+panel_h+8
-                draw_rounded_rect(frame, bx, by, panel_w, 28, 6, (30,30,30))
-                cv2.rectangle(frame, (bx,by), (bx+panel_w, by+28), ACCENT_MOTION, 1)
-                put_text_shadow(frame, badge, (bx+10, by+19), FONT, 0.50, ACCENT_MOTION, 1)
-
-        # ── Left Panel (Mode 2 - Dual Gate) ──────────────────────────────
         elif current_mode == 2:
             panel_x, panel_y, panel_w, panel_h = 10, 65, 280, 200
             draw_panel(frame, panel_x, panel_y, panel_w, panel_h)
-            cv2.rectangle(frame, (panel_x, panel_y),
-                          (panel_x+panel_w, panel_y+panel_h), mode_accent, 1)
+            cv2.rectangle(frame, (panel_x, panel_y), (panel_x+panel_w, panel_y+panel_h), mode_accent, 1)
 
             buf_count = len(hand_sequence_buffer)
             put_text_shadow(frame, "BUFFER", (panel_x+10, panel_y+22), FONT, 0.48, TEXT_DIM, 1)
-            draw_progress_bar(frame, panel_x+10, panel_y+28, panel_w-20, 10,
-                              buf_count, WORD_SEQ_LEN, ACCENT_WORD)
-            put_text_shadow(frame, str(buf_count)+"/"+str(WORD_SEQ_LEN),
-                            (panel_x+10, panel_y+52), FONT, 0.42, TEXT_DIM, 1)
+            draw_progress_bar(frame, panel_x+10, panel_y+28, panel_w-20, 10, buf_count, WORD_SEQ_LEN, ACCENT_WORD)
 
-            # Gate 1
             put_text_shadow(frame, "HAND MOTION", (panel_x+10, panel_y+76), FONT, 0.48, TEXT_DIM, 1)
             m_color = ACCENT_WORD if debug_motion_conf >= MOTION_CONF_THRESH*100 else (100,100,100)
             put_text_shadow(frame, debug_motion_word, (panel_x+10, panel_y+100), FONT_MONO, 0.85, m_color, 2)
-            put_text_shadow(frame, str(round(debug_motion_conf,1))+"%",
-                            (panel_x+130, panel_y+100), FONT, 0.48, m_color, 1)
+            put_text_shadow(frame, str(round(debug_motion_conf,1))+"%", (panel_x+130, panel_y+100), FONT, 0.48, m_color, 1)
 
             if DUAL_GATE_MODE:
-                # Divider
-                cv2.line(frame, (panel_x+8, panel_y+112), (panel_x+panel_w-8, panel_y+112),
-                         (60,60,60), 1)
-
-                # Gate 2
+                cv2.line(frame, (panel_x+8, panel_y+112), (panel_x+panel_w-8, panel_y+112), (60,60,60), 1)
                 put_text_shadow(frame, "FACE SIGNATURE", (panel_x+10, panel_y+130), FONT, 0.48, TEXT_DIM, 1)
                 f_color = ACCENT_WORD if debug_face_conf >= FACE_CONF_THRESH*100 else (100,100,100)
                 put_text_shadow(frame, debug_face_word, (panel_x+10, panel_y+155), FONT_MONO, 0.85, f_color, 2)
-                put_text_shadow(frame, str(round(debug_face_conf,1))+"%",
-                                (panel_x+130, panel_y+155), FONT, 0.48, f_color, 1)
+                put_text_shadow(frame, str(round(debug_face_conf,1))+"%", (panel_x+130, panel_y+155), FONT, 0.48, f_color, 1)
 
-                # Gate status badge
                 gs_colors = {
                     "AGREE":     (0, 220, 100),
+                    "MOTION-OK": (0, 220, 100),
+                    "SINGLE-OK": (0, 220, 100),
                     "DISAGREE":  (0,  60, 220),
                     "LOW CONF":  (0,  90, 255),
-                    "WAITING":   (100,100,100),
-                    "SINGLE-OK": (0, 220, 100),
+                    "NO MOTION": (140, 140, 140),
+                    "WAITING":   (100, 100, 100),
                 }
-                gs_color = gs_colors.get(gate_status, TEXT_DIM)
+                gs_color = gs_colors.get(gate_style := gate_status, TEXT_DIM)
                 bx2, by2 = panel_x+10, panel_y+168
                 draw_rounded_rect(frame, bx2, by2, panel_w-20, 24, 5, (30,30,30))
                 cv2.rectangle(frame, (bx2,by2), (bx2+panel_w-20, by2+24), gs_color, 1)
@@ -711,12 +636,6 @@ with mp_holistic.Holistic(
                 gtx = bx2 + (panel_w-20-gw)//2
                 put_text_shadow(frame, gate_status, (gtx, by2+17), FONT, 0.5, gs_color, 1)
 
-            if on_cooldown:
-                left = global_cooldown_end - current_time
-                draw_progress_bar(frame, panel_x+10, panel_y+panel_h+6, panel_w-20, 8,
-                                  GLOBAL_COOLDOWN-left, GLOBAL_COOLDOWN, ACCENT_WARN)
-
-        # ── Output Box ────────────────────────────────────────────────────
         out_box_y = H - 100
         draw_panel(frame, 0, out_box_y, W, 58)
         cv2.line(frame, (0, out_box_y), (W, out_box_y), mode_accent, 2)
@@ -726,13 +645,11 @@ with mp_holistic.Holistic(
         disp_out = typed_output if len(typed_output) <= max_chars else "..." + typed_output[-max_chars:]
         put_text_shadow(frame, disp_out, (12, out_box_y+48), FONT_MONO, 0.9, TEXT_PRIMARY, 2)
 
-        # ── Hints Bar ─────────────────────────────────────────────────────
         hints_y = H - 36
         draw_panel(frame, 0, hints_y, W, 36)
         hints = "1:Letters  2:Words  N:Cam  Enter:Speak  Space  Bksp  C:Clear  Q:Quit"
         put_text_shadow(frame, hints, (10, hints_y+22), FONT, 0.36, TEXT_DIM, 1)
 
-        # ── Notification Banner ───────────────────────────────────────────
         if current_time < notification_end:
             alpha = min(1.0, (notification_end - current_time) / 0.35)
             nx, ny, nw, nh = W//2-150, 70, 300, 44
@@ -746,9 +663,7 @@ with mp_holistic.Holistic(
 
         cv2.imshow("FSL Dual-Gate Translator", frame)
 
-        # ── Key Handling ──────────────────────────────────────────────────
         key = cv2.waitKey(1) & 0xFF
-
         if key == ord('q') or key == ord('Q'):
             break
         elif key == ord('1'):
