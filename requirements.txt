@@ -1,0 +1,10 @@
+opencv-python
+mediapipe
+pandas
+numpy
+scikit-learn
+pyttsx3
+gTTS
+flask
+flask-socketio
+mysql-connector-python
