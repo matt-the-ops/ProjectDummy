@@ -1,5 +1,6 @@
 opencv-python
 mediapipe
+Pillow
 pandas
 numpy
 scikit-learn

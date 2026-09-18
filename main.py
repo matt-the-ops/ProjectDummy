@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+# Add src directory to Python path so we can import project_paths
+SRC_DIR = Path(__file__).parent / "src"
+sys.path.insert(0, str(SRC_DIR))
+
 import cv2
 import math
 import pickle
@@ -8,8 +15,100 @@ import pyttsx3
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from PIL import Image, ImageDraw, ImageFont
 
 from project_paths import asset_path, model_path
+
+# ------------------------------------------------------------------
+# THEME (matches the app's brand palette)
+# ------------------------------------------------------------------
+COLOR_STORMY_TEAL = (0, 109, 119)   # #006d77 (RGB)
+COLOR_PEARL_AQUA  = (131, 197, 190) # #83c5be (RGB)
+COLOR_ALICE_BLUE  = (237, 246, 249) # #edf6f9 (RGB)
+COLOR_WHITE       = (255, 255, 255)
+COLOR_WARN        = (255, 159, 28)  # amber, RGB
+COLOR_DANGER      = (231, 76, 60)   # red, RGB
+
+def _load_font(size, bold=False):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+FONT_TITLE   = _load_font(22, bold=True)
+FONT_LARGE   = _load_font(46, bold=True)
+FONT_MEDIUM  = _load_font(24, bold=False)
+FONT_SMALL   = _load_font(16, bold=False)
+
+
+def draw_ui(frame_bgr, mode_titles, current_mode, camera_index, on_cooldown,
+            cooldown_left, current_frame_prediction, suppression_active,
+            time_left, word_buffer_len, typed_output):
+    """Renders a clean, minimal overlay using Pillow for crisp typography."""
+    h, w, _ = frame_bgr.shape
+    img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    # ---- Top bar (translucent stormy-teal) ----
+    top_bar_h = 64
+    draw.rectangle([(0, 0), (w, top_bar_h)], fill=(*COLOR_STORMY_TEAL, 200))
+    draw.text((20, 18), mode_titles[current_mode], font=FONT_TITLE, fill=COLOR_ALICE_BLUE)
+
+    cam_label = f"CAM {camera_index}"
+    cam_w = draw.textlength(cam_label, font=FONT_TITLE)
+    draw.text((w - cam_w - 20, 18), cam_label, font=FONT_TITLE, fill=COLOR_PEARL_AQUA)
+
+    # ---- Status pill (cooldown / hold timer / buffer) ----
+    status_text, status_color = None, COLOR_PEARL_AQUA
+    if on_cooldown:
+        status_text = f"Cooldown  {cooldown_left:.1f}s"
+        status_color = COLOR_WARN
+    elif current_mode == 1 and current_frame_prediction and not suppression_active:
+        status_text = f"Hold  {time_left:.1f}s"
+        status_color = COLOR_PEARL_AQUA
+    elif current_mode == 2:
+        status_text = f"Buffer  {word_buffer_len}/40"
+        status_color = COLOR_PEARL_AQUA
+
+    if status_text:
+        pill_w = draw.textlength(status_text, font=FONT_SMALL) + 28
+        pill_x0, pill_y0 = 20, top_bar_h + 14
+        draw.rounded_rectangle(
+            [(pill_x0, pill_y0), (pill_x0 + pill_w, pill_y0 + 30)],
+            radius=15, fill=(*status_color, 60), outline=(*status_color, 255), width=1
+        )
+        draw.text((pill_x0 + 14, pill_y0 + 6), status_text, font=FONT_SMALL, fill=COLOR_WHITE)
+
+    # ---- Current sign, large and minimal ----
+    if current_frame_prediction:
+        draw.text((22, top_bar_h + 56), current_frame_prediction, font=FONT_LARGE, fill=COLOR_ALICE_BLUE)
+
+    # ---- Bottom bar: typed output + key hints ----
+    bottom_h = 96
+    draw.rectangle([(0, h - bottom_h), (w, h)], fill=(*COLOR_STORMY_TEAL, 210))
+
+    draw.text((20, h - bottom_h + 12), "OUTPUT", font=FONT_SMALL, fill=COLOR_PEARL_AQUA)
+    output_display = typed_output if typed_output else "\u2013"
+    # Trim long text so it stays on one line
+    max_chars = max(10, (w - 40) // 14)
+    if len(output_display) > max_chars:
+        output_display = "\u2026" + output_display[-(max_chars - 1):]
+    draw.text((20, h - bottom_h + 32), output_display, font=FONT_MEDIUM, fill=COLOR_ALICE_BLUE)
+
+    hint = "1/2 Mode  \u00b7  N Camera  \u00b7  Enter Speak  \u00b7  Space  \u00b7  Backspace  \u00b7  C Clear  \u00b7  Q Quit"
+    draw.text((20, h - 24), hint, font=FONT_SMALL, fill=(*COLOR_PEARL_AQUA, 220))
+
+    return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
 
 def speak_text(text):
     """Re-initializes a fresh TTS engine instance per call to prevent event loop lockups."""
@@ -247,9 +346,11 @@ while cap.isOpened():
             for connection in HAND_CONNECTIONS:
                 p1 = hand_landmarks[connection[0]]
                 p2 = hand_landmarks[connection[1]]
-                cv2.line(frame, (int(p1.x * w), int(p1.y * h)), (int(p2.x * w), int(p2.y * h)), (255, 255, 255), 2)
+                cv2.line(frame, (int(p1.x * w), int(p1.y * h)), (int(p2.x * w), int(p2.y * h)),
+                         (COLOR_PEARL_AQUA[2], COLOR_PEARL_AQUA[1], COLOR_PEARL_AQUA[0]), 2)
             for lm in hand_landmarks:
-                cv2.circle(frame, (int(lm.x * w), int(lm.y * h)), 5, (0, 255, 0), -1)
+                cv2.circle(frame, (int(lm.x * w), int(lm.y * h)), 4,
+                           (COLOR_STORMY_TEAL[2], COLOR_STORMY_TEAL[1], COLOR_STORMY_TEAL[0]), -1)
 
         if current_mode == 1:
             if active_motion_mode == "J_READY":
@@ -271,24 +372,17 @@ while cap.isOpened():
             if current_mode == 2:
                 word_sequence_buffer.clear()
 
-    # UI Overlay Setup
-    mode_titles = {1: "Mode 1: LETTERS", 2: "Mode 2: WORDS"}
-    cv2.putText(frame, mode_titles[current_mode], (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 150, 255), 2)
-    cv2.putText(frame, f"Cam: {camera_index}", (520, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-    
-    if on_cooldown:
-        cooldown_left = global_cooldown_end - current_time
-        cv2.putText(frame, f"Cooldown: {cooldown_left:.1f}s", (180, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    elif current_mode == 1 and current_frame_prediction != "" and current_time >= suppression_end:
-        time_left = max(0.0, STABILIZATION_DELAY - (current_time - stable_start_time))
-        cv2.putText(frame, f"Hold for {time_left:.1f}s", (180, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-    elif current_mode == 2:
-        cv2.putText(frame, f"Buffer: {len(word_sequence_buffer)}/40", (180, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 100, 255), 2)
+    # ---- Minimalist UI Overlay (Pillow-rendered) ----
+    mode_titles = {1: "LETTERS", 2: "WORDS"}
+    cooldown_left = max(0.0, global_cooldown_end - current_time)
+    time_left = max(0.0, STABILIZATION_DELAY - (current_time - stable_start_time))
+    suppression_active = current_time < suppression_end
 
-    cv2.putText(frame, f"Sign: {current_frame_prediction}", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-    cv2.putText(frame, f"Output: {typed_output}", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 0), 2)
-    cv2.putText(frame, "Keys: 1/2(Mode)|N(Cam)|Enter(Speak)|Space|Bksp|C(Clr)", (20, 450), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    frame = draw_ui(
+        frame, mode_titles, current_mode, camera_index, on_cooldown,
+        cooldown_left, current_frame_prediction, suppression_active,
+        time_left, len(word_sequence_buffer), typed_output
+    )
 
     cv2.imshow("FSL Real-Time Translator", frame)
 
