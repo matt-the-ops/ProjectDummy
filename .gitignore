@@ -2,9 +2,9 @@ models/
 *.pt
 *.pth
 *.index
-
-# Byte-compiled / optimized / DLL files
+venv/
 __pycache__/
+# Byte-compiled / optimized / DLL files
 *.py[codz]
 *$py.class
 

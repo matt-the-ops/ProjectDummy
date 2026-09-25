@@ -24,7 +24,7 @@ CLASSES_PATH = os.path.join(MODELS_DIR, 'word_classes.npy')
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 SEQUENCE_LEN = 40
-HAND_FEATURES = 132   # 126 shape + 6 wrist-trajectory
+HAND_FEATURES = 198   # 126 shape + 36 spatial anchors + 12 facial emotion + 18 per-frame velocities/speeds/direction ratios + 6 trajectory
 FACE_FEATURES = 1404
 AUGMENT_COUNT = 4
 
@@ -50,7 +50,27 @@ def normalize_hand_sequence(hand_seq):
             span = 1.0
         spans.append(span)
         out[:, off:off + 63] = out[:, off:off + 63] / span
-    if out.shape[1] >= 132:
+
+    # Normalize motion velocities, speeds, and trajectories by hand spans
+    if out.shape[1] >= 198:
+        out[:, 174:177] = out[:, 174:177] / spans[0]
+        out[:, 180:183] = out[:, 180:183] / spans[0]
+        out[:, 186:187] = out[:, 186:187] / spans[0]
+        out[:, 188:189] = out[:, 188:189] / spans[0]
+        out[:, 192:195] = out[:, 192:195] / spans[0]
+
+        out[:, 177:180] = out[:, 177:180] / spans[1]
+        out[:, 183:186] = out[:, 183:186] / spans[1]
+        out[:, 187:188] = out[:, 187:188] / spans[1]
+        out[:, 189:190] = out[:, 189:190] / spans[1]
+        out[:, 195:198] = out[:, 195:198] / spans[1]
+    elif out.shape[1] >= 180:
+        out[:, 174:177] = out[:, 174:177] / spans[0]
+        out[:, 177:180] = out[:, 177:180] / spans[1]
+    elif out.shape[1] >= 144:
+        out[:, 138:141] = out[:, 138:141] / spans[0]
+        out[:, 141:144] = out[:, 141:144] / spans[1]
+    elif out.shape[1] >= 132:
         out[:, 126:129] = out[:, 126:129] / spans[0]
         out[:, 129:132] = out[:, 129:132] / spans[1]
     return out
@@ -73,12 +93,102 @@ def augment_hand_sequence(hand_seq, rng, angle_deg=8, scale_range=(0.9, 1.1)):
         block = out[:, off:off + 63].reshape(T, 21, 3)
         block = _rot_scale(block, cos, sin, scale)
         out[:, off:off + 63] = block.reshape(T, 63)
-    if out.shape[1] >= 132:
+    # Augment motion velocities and trajectory if present
+    if out.shape[1] >= 198:
+        for off in (174, 177, 180, 183, 192, 195):
+            block = out[:, off:off + 3].reshape(T, 1, 3)
+            block = _rot_scale(block, cos, sin, scale)
+            out[:, off:off + 3] = block.reshape(T, 3)
+        out[:, 186:190] = out[:, 186:190] * scale
+    elif out.shape[1] >= 180:
+        for off in (174, 177):
+            block = out[:, off:off + 3].reshape(T, 1, 3)
+            block = _rot_scale(block, cos, sin, scale)
+            out[:, off:off + 3] = block.reshape(T, 3)
+    elif out.shape[1] >= 144:
+        for off in (138, 141):
+            block = out[:, off:off + 3].reshape(T, 1, 3)
+            block = _rot_scale(block, cos, sin, scale)
+            out[:, off:off + 3] = block.reshape(T, 3)
+    elif out.shape[1] >= 132:
         for off in (126, 129):
             block = out[:, off:off + 3].reshape(T, 1, 3)
             block = _rot_scale(block, cos, sin, scale)
             out[:, off:off + 3] = block.reshape(T, 3)
     return out.astype(np.float32)
+
+def upgrade_hand_sequence(hand_arr):
+    """Upgrades legacy 144-dim or 180-dim hand sequences to full 198-dim feature vectors."""
+    shape = hand_arr.shape
+    if shape == (SEQUENCE_LEN, 198):
+        return hand_arr
+    if shape == (SEQUENCE_LEN, 180):
+        base_174 = hand_arr[:, :174]
+        traj_6   = hand_arr[:, 174:180]
+        lw_traj  = traj_6[:, :3]
+        rw_traj  = traj_6[:, 3:]
+
+        vel_lw = np.zeros_like(lw_traj)
+        vel_rw = np.zeros_like(rw_traj)
+        vel_lw[1:] = np.diff(lw_traj, axis=0)
+        vel_rw[1:] = np.diff(rw_traj, axis=0)
+        vel_li = vel_lw.copy()
+        vel_ri = vel_rw.copy()
+
+        sp_lw = np.linalg.norm(vel_lw, axis=1, keepdims=True)
+        sp_rw = np.linalg.norm(vel_rw, axis=1, keepdims=True)
+        sp_li = np.linalg.norm(vel_li, axis=1, keepdims=True)
+        sp_ri = np.linalg.norm(vel_ri, axis=1, keepdims=True)
+
+        dir_l = np.clip(vel_lw[:, 1:2] / (np.abs(vel_lw[:, 0:1]) + 1e-4), -5.0, 5.0)
+        dir_r = np.clip(vel_rw[:, 1:2] / (np.abs(vel_rw[:, 0:1]) + 1e-4), -5.0, 5.0)
+
+        dyn_24 = np.hstack([
+            vel_lw, vel_rw, vel_li, vel_ri,
+            sp_lw, sp_rw, sp_li, sp_ri,
+            dir_l, dir_r,
+            lw_traj, rw_traj
+        ])
+        return np.concatenate([base_174, dyn_24], axis=1).astype(np.float32)
+
+    if shape == (SEQUENCE_LEN, 144):
+        lh_rh_shape = hand_arr[:, :126]
+        old_spatial = hand_arr[:, 126:138]
+        traj_6      = hand_arr[:, 138:144]
+
+        expanded_spatial = np.zeros((SEQUENCE_LEN, 36), dtype=np.float32)
+        expanded_spatial[:, :6]  = old_spatial[:, :6]
+        expanded_spatial[:, 18:24] = old_spatial[:, 6:12]
+
+        expr_12 = np.zeros((SEQUENCE_LEN, 12), dtype=np.float32)
+        base_174 = np.concatenate([lh_rh_shape, expanded_spatial, expr_12], axis=1)
+
+        lw_traj = traj_6[:, :3]
+        rw_traj = traj_6[:, 3:]
+        vel_lw = np.zeros_like(lw_traj)
+        vel_rw = np.zeros_like(rw_traj)
+        vel_lw[1:] = np.diff(lw_traj, axis=0)
+        vel_rw[1:] = np.diff(rw_traj, axis=0)
+        vel_li = vel_lw.copy()
+        vel_ri = vel_rw.copy()
+
+        sp_lw = np.linalg.norm(vel_lw, axis=1, keepdims=True)
+        sp_rw = np.linalg.norm(vel_rw, axis=1, keepdims=True)
+        sp_li = np.linalg.norm(vel_li, axis=1, keepdims=True)
+        sp_ri = np.linalg.norm(vel_ri, axis=1, keepdims=True)
+
+        dir_l = np.clip(vel_lw[:, 1:2] / (np.abs(vel_lw[:, 0:1]) + 1e-4), -5.0, 5.0)
+        dir_r = np.clip(vel_rw[:, 1:2] / (np.abs(vel_rw[:, 0:1]) + 1e-4), -5.0, 5.0)
+
+        dyn_24 = np.hstack([
+            vel_lw, vel_rw, vel_li, vel_ri,
+            sp_lw, sp_rw, sp_li, sp_ri,
+            dir_l, dir_r,
+            lw_traj, rw_traj
+        ])
+        return np.concatenate([base_174, dyn_24], axis=1).astype(np.float32)
+
+    return hand_arr
 
 # ── Dataset Loader ──────────────────────────────────────────────────────
 def load_dataset():
@@ -109,6 +219,8 @@ def load_dataset():
                 skipped += 1
                 continue
             face_arr = np.load(fp)
+
+            hand_arr = upgrade_hand_sequence(hand_arr)
 
             if hand_arr.shape != (SEQUENCE_LEN, HAND_FEATURES):
                 print(f"  [!] Bad hand shape {hand_arr.shape} in {hf}, skipping.")

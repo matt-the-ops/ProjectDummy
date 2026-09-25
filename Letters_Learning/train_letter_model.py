@@ -1,7 +1,7 @@
 import os
-import csv
 import pickle
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
@@ -20,29 +20,14 @@ def train_letter_model():
         print(f"[!] Error: Dataset '{CSV_FILE}' not found. Run collect_letter_data.py to collect letter samples.")
         return
 
-    X = []
-    y = []
-
-    with open(CSV_FILE, mode='r') as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            if not row or len(row) < 64:
-                continue
-            label = row[0]
-            try:
-                features = [float(val) for val in row[1:64]]
-                X.append(features)
-                y.append(label)
-            except ValueError:
-                continue
-
-    if not X:
-        print("[!] Error: No valid rows found in CSV.")
+    # Load dataset using pandas
+    df = pd.read_csv(CSV_FILE)
+    if df.empty or len(df.columns) < 64:
+        print("[!] Error: No valid rows/columns found in CSV.")
         return
 
-    X = np.array(X, dtype=np.float32)
-    y = np.array(y)
+    y = df.iloc[:, 0].values
+    X = df.iloc[:, 1:64].values.astype(np.float32)
 
     labels, counts = np.unique(y, return_counts=True)
     print(f"[*] Loaded {len(X)} samples across {len(labels)} classes.")
