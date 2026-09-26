@@ -442,33 +442,35 @@ def extract_face_frame(results):
     return out
 
 # ─────────────────────────────────────────────
-#  Neumorphism Colour Palette
+#  Modern Colour Palette (Project B.M.O)
 # ─────────────────────────────────────────────
 # Tkinter hex colours
-BG          = "#E8EAF0"      # main background
-CARD        = "#ECEEF4"      # raised card surface
-CARD_IN     = "#E0E2EA"      # inset / pressed surface
-SHADOW_D    = "#C8CAD4"      # dark shadow
-SHADOW_L    = "#FFFFFF"      # light highlight
-TXT_DARK    = "#2E2C3C"      # primary text
-TXT_MID     = "#8886A0"      # secondary text
-TXT_FAINT   = "#B8B6CC"      # hint text
+BG_TOP      = "#FFFFFF"      # gradient bg top
+BG_BOT      = "#E6EAF2"      # gradient bg bot
+CARD        = "#FFFFFF"      # clean white card
+CARD_DARK   = "#0D1117"      # camera feed dark card
+SHADOW      = "#D0D6E2"      # clean drop shadow
+SHADOW_D    = "#F0F3F8"      # light track color used by gradient progress bars
+ICON_BG     = "#F0F3F8"      # neutral background for icon buttons
+ICON_BG_ON  = "#E7F0FF"      # active/lit icon button background
+TXT_DARK    = "#1A1A24"      # primary text
+TXT_MID     = "#6E7182"      # secondary text
+TXT_FAINT   = "#989BA8"      # hint text
 WHITE       = "#FFFFFF"
 
-ACC_BLUE    = "#2E7CF6"      # primary accent (detection ring, progress, speak btn)
-ACC_BLUE2   = "#5BA8FF"      # lighter blue
-ACC_NAVY    = "#1A2F5A"      # speak button bg
-ACC_GREEN   = "#52C878"      # online dot / agree
-ACC_RED     = "#E85F5F"      # record dot / disagree
-ACC_AMBER   = "#F5AF46"      # warning / cooldown
-ACC_PURPLE  = "#966BC3"      # letters accent
-ACC_ORANGE  = "#F0A540"      # letters accent2
-ACC_TEAL    = "#3DB8B0"
-BMO_GREEN   = "#7ED87E"      # BMO card accent
+ACC_BLUE    = "#2064E0"      # primary accent (buttons, etc.)
+ACC_BLUE2   = "#4D94FF"      # lighter blue gradient part
+ACC_CYAN    = "#00D4FF"      # detection ring gradient target
+ACC_NAVY    = "#1A2033"      # dark pills
+ACC_GREEN   = "#1DB954"      # online dot / steady
+ACC_RED     = "#E53935"      # disagree / record
+ACC_AMBER   = "#FFA000"      # warning / cooldown
+ACC_PURPLE  = "#8A2BE2"
+BMO_GREEN   = "#22C55E"      # BMO avatar
 
 
 # ─────────────────────────────────────────────
-#  PIL Neumorphism Drawing Helpers
+#  PIL Drawing Helpers
 # ─────────────────────────────────────────────
 def hex2rgb(h):
     h = h.lstrip('#')
@@ -480,28 +482,16 @@ def _blend(c1, c2, t):
 def rgb2hex(r, g, b):
     return f"#{r:02x}{g:02x}{b:02x}"
 
-def draw_neu_card(draw: ImageDraw.ImageDraw, x, y, w, h, r=18,
-                  bg=CARD, depth=6, inset=False):
-    """Neumorphic card on a PIL ImageDraw surface."""
-    bgc  = hex2rgb(bg)
-    dark = hex2rgb(SHADOW_D)
-    lite = hex2rgb(SHADOW_L)
-
-    if not inset:
-        # dark shadow (bottom-right)
-        _rounded_rect(draw, x+depth, y+depth, w, h, r, _blend(bgc, dark, 0.55))
-        # light shadow (top-left)
-        _rounded_rect(draw, x-depth, y-depth, w, h, r, _blend(bgc, lite, 0.70))
-        # face
-        _rounded_rect(draw, x, y, w, h, r, bgc)
-    else:
-        _rounded_rect(draw, x, y, w, h, r, hex2rgb(CARD_IN))
-        # inner top-left dark line
-        draw.line([(x+r, y+1), (x+w-r, y+1)], fill=dark, width=2)
-        draw.line([(x+1, y+r), (x+1, y+h-r)], fill=dark, width=2)
-        # inner bottom-right light line
-        draw.line([(x+r, y+h-1), (x+w-r, y+h-1)], fill=lite, width=2)
-        draw.line([(x+w-1, y+r), (x+w-1, y+h-r)], fill=lite, width=2)
+def draw_shadow_card(draw: ImageDraw.ImageDraw, x, y, w, h, r=18,
+                     bg=CARD, shadow_color=SHADOW, blur=8, offset_y=4):
+    """Draw a card with a clean, smooth multi-pass diffused drop shadow."""
+    bgc = hex2rgb(bg)
+    if shadow_color:
+        sc = hex2rgb(shadow_color)
+        soft_outer = _blend(sc, hex2rgb(BG_BOT), 0.55)
+        _rounded_rect(draw, x - 1, y + offset_y + 2, w + 2, h + 2, r + 2, soft_outer)
+        _rounded_rect(draw, x, y + offset_y, w, h, r, sc)
+    _rounded_rect(draw, x, y, w, h, r, bgc)
 
 def _rounded_rect(draw, x, y, w, h, r, fill):
     """Fill a rounded rectangle on a PIL ImageDraw."""
@@ -515,15 +505,29 @@ def _rounded_rect(draw, x, y, w, h, r, fill):
     draw.ellipse([x+w-2*r, y+h-2*r, x+w, y+h], fill=fill)
 
 def draw_progress_arc(draw, cx, cy, radius, thickness, value, max_val,
-                      fg_color, bg_color=SHADOW_D):
-    """Draw a circular arc progress ring."""
+                      fg_color, bg_color="#EAECEF", start_angle=-90, is_gradient=False, end_color=None):
+    """Draw a circular arc progress ring. If is_gradient, draw segmented gradient arc."""
     frac  = max(0.0, min(value / max(max_val, 1e-6), 1.0))
     box   = [cx-radius, cy-radius, cx+radius, cy+radius]
+    
     # background ring
     draw.arc(box, 0, 360, fill=hex2rgb(bg_color), width=thickness)
     if frac > 0.005:
-        end_angle = -90 + 360 * frac
-        draw.arc(box, -90, end_angle, fill=hex2rgb(fg_color), width=thickness)
+        total_sweep = 360 * frac
+        if is_gradient and end_color:
+            c1 = hex2rgb(fg_color)
+            c2 = hex2rgb(end_color)
+            # draw in small segments to simulate gradient
+            segments = max(5, int(total_sweep / 2))
+            for i in range(segments):
+                sa = start_angle + (i / segments) * total_sweep
+                ea = start_angle + ((i+1) / segments) * total_sweep + 1  # +1 overlap
+                t = i / (segments - 1) if segments > 1 else 1.0
+                curr_c = _blend(c1, c2, t)
+                draw.arc(box, sa, ea, fill=curr_c, width=thickness)
+        else:
+            end_angle = start_angle + total_sweep
+            draw.arc(box, start_angle, end_angle, fill=hex2rgb(fg_color), width=thickness)
 
 def draw_pill(draw, x, y, w, h, fill):
     r = h // 2
@@ -547,7 +551,6 @@ def gradient_pill(draw, x, y, w, h, c1, c2):
     mask = Image.new("L", (w, h), 0)
     md   = ImageDraw.Draw(mask)
     md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
-    # We can't paste onto draw directly; caller must handle
     return grad, mask
 
 # ─────────────────────────────────────────────
@@ -874,20 +877,27 @@ class ShieldFSLApp:
     # ────────────────────────────────────────────────────
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("SHIELD FSL")
-        self.root.configure(bg=BG)
+        self.root.title("Project B.M.O")
+        self.root.configure(bg=BG_TOP)
         self.root.geometry(f"{self.W}x{self.H}")
         self.root.resizable(True, True)
         self.fullscreen = False
 
         # ── Canvas (single surface) ──
         self.canvas = tk.Canvas(root, width=self.W, height=self.H,
-                                bg=BG, highlightthickness=0)
+                                bg=BG_TOP, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # ── PIL offscreen image ──
-        self.pil_img   = Image.new("RGB", (self.W, self.H), hex2rgb(BG))
+        self.pil_img   = Image.new("RGB", (self.W, self.H), hex2rgb(BG_TOP))
         self.tk_img    = None   # kept to prevent GC
+
+        # Hit-test rects for the 3 functional camera control buttons, keyed by name
+        self._cam_btn_rects = {}
+
+        # Speak button interaction state
+        self._spk_hover       = False   # True while cursor is over the button
+        self._spk_click_until = 0.0     # time.time() deadline for click-flash
 
         # Cached camera ImageTk (updated by thread)
         self._cam_photo  = None
@@ -899,15 +909,22 @@ class ShieldFSLApp:
         self._bmo_talk_tk = None
 
         # ── Load Logo ──
-        self._logo_resized = None
-        self._logo_mask    = None
+        self._logo_rgba     = None
+        self._logo_alpha    = None
+        self._logo_rim      = None
+        self._logo_rim_mask = None
+        self._logo_shadow   = None
+        self._logo_pad      = 20
+        self._logo_w        = 50
+        self._logo_h        = 50
         self._load_logo()
 
         # Key and Mouse bindings
-        root.bind("<KeyPress>", self._on_key)
-        root.bind("<Button-1>", self._on_click)
-        root.bind("<F11>",      lambda e: self._toggle_fullscreen())
-        root.bind("<Escape>",   lambda e: self._exit_fullscreen())
+        root.bind("<KeyPress>",  self._on_key)
+        root.bind("<Button-1>",  self._on_click)
+        root.bind("<Motion>",    self._on_motion)
+        root.bind("<F11>",       lambda e: self._toggle_fullscreen())
+        root.bind("<Escape>",    lambda e: self._exit_fullscreen())
 
         # FPS tracking
         self._frame_times = collections.deque(maxlen=30)
@@ -923,7 +940,7 @@ class ShieldFSLApp:
 
     # ── Logo loader ──────────────────────────────────────
     def _load_logo(self):
-        """Load SHIELD FSL logo from assets and prepare for top bar."""
+        """Load SHIELD logo preserving both white and blue figures, with rim contour and soft drop shadow."""
         logo_path = os.path.join(ASSETS_DIR, 'shield_logo.png')
         if not os.path.exists(logo_path):
             logo_path = os.path.join(ASSETS_DIR, 'logo.png')
@@ -931,21 +948,34 @@ class ShieldFSLApp:
             return
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            # Make near-white pixels transparent for clean compositing
-            data = list(logo.getdata())
-            new_data = []
-            for r, g, b, a in data:
-                if r > 235 and g > 235 and b > 235:
-                    new_data.append((r, g, b, 0))
-                else:
-                    new_data.append((r, g, b, a))
-            logo.putdata(new_data)
-            # Resize to fit top bar
-            logo_size = 44
-            logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
-            self._logo_resized = logo.convert("RGB")
-            self._logo_mask = logo.split()[3]  # alpha channel
-            print("[OK] Logo loaded.")
+            target_h = 50
+            aspect = logo.size[0] / max(logo.size[1], 1)
+            target_w = int(target_h * aspect)
+            logo_resized = logo.resize((target_w, target_h), Image.LANCZOS)
+            alpha = logo_resized.split()[3]
+
+            # Soft rim contour so the white figure pops cleanly against light backgrounds
+            # Wider MaxFilter gives a fuller outline; higher alpha ensures visibility on white bg
+            rim_mask = alpha.filter(ImageFilter.MaxFilter(7))
+            rim = Image.new("RGBA", (target_w, target_h), (60, 100, 180, 120))
+
+            # Soft diffused drop shadow — lower alpha + wider blur = floating, non-intrusive shadow
+            pad = 20
+            sw, sh = target_w + pad * 2, target_h + pad * 2
+            shadow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+            shadow_solid = Image.new("RGBA", (target_w, target_h), (15, 30, 60, 65))
+            shadow.paste(shadow_solid, (pad + 1, pad + 5), alpha)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=6))
+
+            self._logo_rgba     = logo_resized
+            self._logo_alpha    = alpha
+            self._logo_rim      = rim
+            self._logo_rim_mask = rim_mask
+            self._logo_shadow   = shadow
+            self._logo_pad      = pad
+            self._logo_w        = target_w
+            self._logo_h        = target_h
+            print("[OK] Logo loaded with drop shadow and rim contour.")
         except Exception as e:
             print(f"[!] Logo load error: {e}")
 
@@ -1011,6 +1041,17 @@ class ShieldFSLApp:
             typed_output = ""
             set_notification("OUTPUT CLEARED")
 
+    # ── Mouse motion handler (hover tracking) ───────────
+    def _on_motion(self, event):
+        mx, my = event.x, event.y
+        spk_w  = 200
+        spk_h  = 50
+        spk_x  = self.W - self.PAD - 24 - spk_w
+        y_bot  = self.H - self.BOT_H - self.PAD
+        spk_y  = y_bot + 24
+        self._spk_hover = (spk_x <= mx <= spk_x + spk_w and
+                           spk_y <= my <= spk_y + spk_h)
+
     # ── Mouse click handler ──────────────────────────────
     def _on_click(self, event):
         global current_mode, typed_output, camera_hidden
@@ -1021,7 +1062,7 @@ class ShieldFSLApp:
         mx, my = event.x, event.y
 
         # Mode tabs click
-        tab_w, tab_h = 260, 38
+        tab_w, tab_h = 240, 42
         tab_x = self.W // 2 - tab_w // 2
         tab_y = (self.TOP_H - tab_h) // 2
         if tab_y <= my <= tab_y + tab_h:
@@ -1042,27 +1083,30 @@ class ShieldFSLApp:
                 gate_status = "WAITING"
                 set_notification("WORDS MODE")
 
-        # Camera eye toggle click
-        eye_w, eye_h = 40, 28
-        eye_x = self.PAD + self.LEFT_W - eye_w - 16
-        eye_y = self.CONTENT_Y + (40 - eye_h) // 2 + 2
-        if eye_x - 5 <= mx <= eye_x + eye_w + 5 and eye_y - 5 <= my <= eye_y + eye_h + 5:
-            camera_hidden = not camera_hidden
-            set_notification("CAMERA HIDDEN" if camera_hidden else "CAMERA VISIBLE")
-
-        # Calibrate button click
-        cal_w, cal_h = 110, 28
-        cal_x = eye_x - cal_w - 10
-        cal_y = eye_y
-        if cal_x - 5 <= mx <= cal_x + cal_w + 5 and cal_y - 5 <= my <= cal_y + cal_h + 5:
-            trigger_calibration()
+        # Camera control row: switch camera / toggle visibility / calibrate.
+        # Hit-tests the exact rects the buttons were last drawn at.
+        global camera_index, cap
+        for key, (bx0, by0, bx1, by1) in self._cam_btn_rects.items():
+            if bx0 <= mx <= bx1 and by0 <= my <= by1:
+                if key == "eye":
+                    camera_hidden = not camera_hidden
+                    set_notification("CAMERA HIDDEN" if camera_hidden else "CAMERA VISIBLE")
+                elif key == "lock":
+                    trigger_calibration()
+                elif key == "cam":
+                    cap.release()
+                    camera_index = (camera_index + 1) % 3
+                    cap = cv2.VideoCapture(camera_index)
+                    set_notification(f"CAMERA → {camera_index}")
+                break
 
         # Speak button click
-        spk_w = 150
+        spk_w = 200
         spk_x = self.W - self.PAD - 24 - spk_w
         y_bot = self.H - self.BOT_H - self.PAD
-        spk_y = y_bot + 16 + (54 - 50) // 2
+        spk_y = y_bot + 24
         if spk_x - 5 <= mx <= spk_x + spk_w + 5 and spk_y - 5 <= my <= spk_y + 50 + 5:
+            self._spk_click_until = time.time() + 0.18   # 180 ms click-flash
             speak_text(typed_output)
 
     # ── ML / camera processing thread ────────────────────
@@ -1075,6 +1119,7 @@ class ShieldFSLApp:
         global hand_sequence_buffer, wrist_sequence_buffer, face_sequence_buffer
         global debug_motion_word, debug_motion_conf, debug_face_word, debug_face_conf
         global gate_status, missing_frames, node_count, fps_value
+        global lux_value, dist_cm
 
         last_left_hand  = None
         last_right_hand = None
@@ -1107,6 +1152,30 @@ class ShieldFSLApp:
                 now = time.time()
                 fps_value = 1.0 / max(now - _prev_t, 1e-6)
                 _prev_t   = now
+
+                # ── Ambient Lux estimate from frame brightness ──
+                # Convert to grayscale, take mean pixel value (0–255),
+                # then map to a plausible lux range (0–2000) with a simple power curve.
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                mean_brightness = float(cv2.mean(gray)[0])          # 0–255
+                raw_lux = (mean_brightness / 255.0) ** 1.8 * 2000.0
+                # EMA smooth so the number doesn't jump every frame
+                lux_value = lux_value * 0.85 + raw_lux * 0.15
+
+                # ── Focal Distance estimate from face landmark span ──
+                # Uses the eye-to-eye width in normalised coords; a real webcam at
+                # typical 60° FOV and average inter-pupillary distance (~63 mm)
+                # gives a rough cm estimate.
+                FOCAL_REF_PX   = 0.30   # normalised IPD when face is ~50 cm away
+                REAL_IPD_CM    = 6.3
+                FOCAL_REF_DIST = 50.0
+                if results.face_landmarks:
+                    lm = results.face_landmarks.landmark
+                    # Landmark 33 = left eye outer, 263 = right eye outer
+                    le = lm[33]; re = lm[263]
+                    ipd_norm = abs(re.x - le.x)
+                    if ipd_norm > 0.01:
+                        dist_cm = dist_cm * 0.85 + (FOCAL_REF_DIST * FOCAL_REF_PX / ipd_norm) * 0.15
 
                 # ── Anatomical Hand Disambiguation & EMA Smoothing ──
                 last_left_hand, last_right_hand, lost_frames_left, lost_frames_right = resolve_and_smooth_hands(
@@ -1403,8 +1472,17 @@ class ShieldFSLApp:
         now  = time.time()
         W, H = self.W, self.H
 
-        img  = Image.new("RGB", (W, H), hex2rgb(BG))
+        img  = Image.new("RGB", (W, H), hex2rgb(BG_TOP))
         draw = ImageDraw.Draw(img)
+
+        # Draw subtle background gradient (white to light blue-gray)
+        c1 = hex2rgb(BG_TOP)
+        c2 = hex2rgb(BG_BOT)
+        # To avoid slow loop, just draw some large rects or we can just do a simple vertical gradient
+        for y in range(0, H, max(1, H//50)):
+            t = y / max(H-1, 1)
+            c = _blend(c1, c2, t)
+            draw.rectangle([0, y, W, y + max(1, H//50)], fill=c)
 
         self._draw_topbar(img, draw, now)
         self._draw_left_panel(img, draw, now)
@@ -1418,79 +1496,86 @@ class ShieldFSLApp:
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
 
-    # ─────────────────────────────────────────────────────
-    #  TOP BAR — Logo + Title + Mode Tabs + FPS
-    # ─────────────────────────────────────────────────────
     def _draw_topbar(self, img, draw, now):
         W  = self.W
         h  = self.TOP_H
 
-        # Neumorphic top bar background
-        draw_neu_card(draw, 0, 0, W, h, r=0, bg=BG, depth=4)
+        # Clean top bar background with soft drop shadow
+        draw_shadow_card(draw, 0, -10, W, h + 10, r=0, bg=CARD, shadow_color=SHADOW, offset_y=3)
 
-        # ── Logo image ──
+        # Subtle bottom separator line
+        draw.line([(0, h - 1), (W, h - 1)], fill=hex2rgb("#E2E8F0"), width=1)
+
+        # ── Logo image with drop shadow (NO circle) ──
         logo_x = self.PAD
         logo_cy = h // 2
-        if self._logo_resized is not None:
-            lw, lh = self._logo_resized.size
+
+        if self._logo_rgba is not None:
+            lw, lh = self._logo_w, self._logo_h
             ly = logo_cy - lh // 2
-            img.paste(self._logo_resized, (logo_x, ly), self._logo_mask)
-            text_x = logo_x + lw + 12
+            # 1. Soft drop shadow
+            img.paste(self._logo_shadow, (logo_x - self._logo_pad, ly - self._logo_pad), self._logo_shadow)
+            # 2. Rim contour
+            img.paste(self._logo_rim, (logo_x, ly), self._logo_rim_mask)
+            # 3. Logo itself
+            img.paste(self._logo_rgba, (logo_x, ly), self._logo_alpha)
+            text_x = logo_x + lw + 16
         else:
-            # Fallback: blue shield dot
-            draw.ellipse([logo_x, logo_cy-12, logo_x+24, logo_cy+12],
-                         fill=hex2rgb(ACC_BLUE))
-            draw.ellipse([logo_x+6, logo_cy-6, logo_x+18, logo_cy+6],
-                         fill=hex2rgb(WHITE))
-            text_x = logo_x + 34
+            # Fallback
+            draw.ellipse([logo_x, logo_cy-16, logo_x+32, logo_cy+16], fill=hex2rgb(ACC_BLUE))
+            text_x = logo_x + 48
 
-        # "SHIELD FSL" title
-        _draw_text(draw, text_x, logo_cy, "SHIELD FSL", size=22,
-                   fill=TXT_DARK, bold=True, anchor="lm")
+        # ── "Project B.M.O" title with pixel-perfect kerning & gradient ──
+        f_title = _get_font(24, bold=True)
+        _draw_text(draw, text_x, logo_cy - 12, "Project", size=24, fill="#0F172A", bold=True, anchor="lm")
+        proj_w = draw.textlength("Project ", font=f_title)
 
-        # Green online dot
-        dot_x = text_x + 130
-        draw.ellipse([dot_x, logo_cy - 5, dot_x + 10, logo_cy + 5],
-                     fill=hex2rgb(ACC_GREEN))
+        bmo_x = int(text_x + proj_w)
+        bmo_w = int(draw.textlength("B.M.O", font=f_title))
+        _draw_gradient_text(img, bmo_x, logo_cy - 12, "B.M.O", size=24,
+                            c1_hex="#2563EB", c2_hex="#06B6D4", bold=True, anchor="lm")
+
+        # Sleek "● ONLINE" status pill
+        pill_x = bmo_x + bmo_w + 14
+        pill_y = logo_cy - 12 - 10
+        pill_w, pill_h = 68, 20
+        draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
+                               radius=10, fill=hex2rgb("#ECFDF5"), outline=hex2rgb("#A7F3D0"), width=1)
+        draw.ellipse([pill_x + 8, pill_y + 7, pill_x + 14, pill_y + 13], fill=hex2rgb("#10B981"))
+        _draw_text(draw, pill_x + 20, pill_y + 10, "ONLINE", size=9, fill="#059669", bold=True, anchor="lm")
+
+        # Subtitle
+        _draw_text(draw, text_x, logo_cy + 13, "FILIPINO SIGN LANGUAGE NEURAL CORE • V2.4", size=10, fill="#64748B", bold=True, anchor="lm")
 
         # ── Centre pill tabs (Letters / Words) ──
-        tab_w, tab_h = 260, 38
+        tab_w, tab_h = 240, 42
         tab_x = W // 2 - tab_w // 2
         tab_y = (h - tab_h) // 2
-        draw_neu_card(draw, tab_x, tab_y, tab_w, tab_h, r=tab_h//2,
-                      bg=CARD_IN, depth=3, inset=True)
+
+        # Background pill (inactive)
+        draw_pill(draw, tab_x, tab_y, tab_w, tab_h, fill="#F1F5F9")
 
         slot_w = tab_w // 2
-        # Active tab pill
+        # Active tab pill (Gradient)
         ax = tab_x if current_mode == 1 else tab_x + slot_w
-        _rounded_rect(draw, ax+3, tab_y+3, slot_w-6, tab_h-6,
-                      (tab_h-6)//2, hex2rgb(WHITE))
+        grad, mask = gradient_pill(draw, 0, 0, slot_w, tab_h, ACC_BLUE, ACC_CYAN)
+        img.paste(grad, (ax, tab_y), mask)
 
-        _draw_text(draw, tab_x + slot_w//2, tab_y + tab_h//2,
-                   "Letters", size=15,
-                   fill=TXT_DARK if current_mode == 1 else TXT_MID,
-                   bold=(current_mode == 1), anchor="mm")
-        _draw_text(draw, tab_x + slot_w + slot_w//2, tab_y + tab_h//2,
-                   "Words", size=15,
-                   fill=TXT_DARK if current_mode == 2 else TXT_MID,
-                   bold=(current_mode == 2), anchor="mm")
+        # Tab text
+        _draw_text(draw, tab_x + slot_w//2, tab_y + tab_h//2, "Letters", size=15,
+                   fill=WHITE if current_mode == 1 else "#64748B", bold=(current_mode == 1), anchor="mm")
+        _draw_text(draw, tab_x + slot_w + slot_w//2, tab_y + tab_h//2, "Words", size=15,
+                   fill=WHITE if current_mode == 2 else "#64748B", bold=(current_mode == 2), anchor="mm")
 
-        # ── Right: FPS chip ──
-        fps_txt = f"{fps_value:.0f} FPS"
-        cw = 90
-        cx = W - self.PAD - cw
-        cy = (h - 28) // 2
-        draw_neu_card(draw, cx, cy, cw, 28, r=14, bg=CARD, depth=3)
-        _draw_text(draw, cx + cw//2, cy + 14, fps_txt,
-                   size=12, fill=TXT_MID, anchor="mm")
+        # ── Right: Single Sleek FPS Chip (NO duplicate mode chip, NO "U" avatar) ──
+        fps_w, fps_h = 92, 32
+        fps_x = W - self.PAD - fps_w
+        fps_y = (h - fps_h) // 2
 
-        # Mode chip next to FPS
-        mode_txt = "FSL"
-        mw = 60
-        mx = cx - mw - 10
-        draw_neu_card(draw, mx, cy, mw, 28, r=14, bg=CARD, depth=3)
-        _draw_text(draw, mx + mw//2, cy + 14, mode_txt,
-                   size=12, fill=TXT_MID, anchor="mm")
+        draw.rounded_rectangle([fps_x, fps_y, fps_x + fps_w, fps_y + fps_h],
+                               radius=fps_h//2, fill=hex2rgb("#F8FAFC"), outline=hex2rgb("#E2E8F0"), width=1)
+        draw.ellipse([fps_x + 12, fps_y + 13, fps_x + 18, fps_y + 19], fill=hex2rgb("#10B981"))
+        _draw_text(draw, fps_x + 26, fps_y + 16, f"{fps_value:.0f} FPS", size=12, fill="#1E293B", bold=True, anchor="lm")
 
     # ─────────────────────────────────────────────────────
     #  LEFT PANEL — Camera feed card
@@ -1503,148 +1588,157 @@ class ShieldFSLApp:
         h    = self.CONTENT_H
         r    = 20
 
-        # Outer card
-        draw_neu_card(draw, x, y, w, h, r=r, bg=CARD, depth=6)
+        # Outer card (Dark)
+        draw_shadow_card(draw, x, y, w, h, r=r, bg=CARD_DARK, shadow_color=SHADOW, offset_y=4)
 
-        # ── Card header ──
-        header_h = 40
-        # Camera label
-        mode_label = "Letters" if current_mode == 1 else "Words"
-        _draw_text(draw, x + 20, y + header_h // 2, f"Camera Feed  —  {mode_label}",
-                   size=14, fill=TXT_MID, anchor="lm")
-
-        # Camera hide/show toggle (eye icon)
-        eye_w, eye_h = 40, 28
-        eye_x = x + w - eye_w - 16
-        eye_y = y + (header_h - eye_h) // 2 + 2
-        draw_neu_card(draw, eye_x, eye_y, eye_w, eye_h, r=8, bg=CARD, depth=3)
-        if camera_hidden:
-            # Crossed-out eye: draw a small "X"
-            cx_e = eye_x + eye_w // 2
-            cy_e = eye_y + eye_h // 2
-            draw.ellipse([cx_e - 6, cy_e - 4, cx_e + 6, cy_e + 4],
-                         outline=hex2rgb(ACC_RED), width=2)
-            draw.line([(cx_e - 8, cy_e - 6), (cx_e + 8, cy_e + 6)],
-                      fill=hex2rgb(ACC_RED), width=2)
-        else:
-            # Open eye icon
-            cx_e = eye_x + eye_w // 2
-            cy_e = eye_y + eye_h // 2
-            draw.ellipse([cx_e - 6, cy_e - 4, cx_e + 6, cy_e + 4],
-                         outline=hex2rgb(ACC_BLUE), width=2)
-            draw.ellipse([cx_e - 2, cy_e - 2, cx_e + 2, cy_e + 2],
-                         fill=hex2rgb(ACC_BLUE))
-
-        # Calibrate Button
-        cal_w, cal_h = 110, 28
-        cal_x = eye_x - cal_w - 10
-        cal_y = eye_y
-        draw_neu_card(draw, cal_x, cal_y, cal_w, cal_h, r=8, bg=CARD, depth=3)
-        if is_calibrating:
-            _draw_text(draw, cal_x + cal_w//2, cal_y + cal_h//2,
-                       f"Calib {calibration_progress:.0f}%", size=12, fill=ACC_BLUE, bold=True, anchor="mm")
-        elif target_person_lock is not None:
-            _draw_text(draw, cal_x + cal_w//2, cal_y + cal_h//2,
-                       "🔒 Locked", size=12, fill=ACC_GREEN, bold=True, anchor="mm")
-        else:
-            _draw_text(draw, cal_x + cal_w//2, cal_y + cal_h//2,
-                       "🔒 Calibrate", size=12, fill=TXT_MID, anchor="mm")
-
-        # ── Camera area ──
-        cam_pad = 14
+        cam_pad = 8
         cam_x   = x + cam_pad
-        cam_y   = y + header_h + 4
+        cam_y   = y + cam_pad
         cam_w   = w - cam_pad * 2
-        cam_h   = h - header_h - cam_pad - 4
+        cam_h   = h - cam_pad * 2
 
         if camera_hidden:
             # ── Hidden placeholder ──
-            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_IN))
-            # Draw a large eye-slash icon in center
+            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_DARK))
             cx_c = cam_x + cam_w // 2
             cy_c = cam_y + cam_h // 2
-            # Eye shape
-            draw.ellipse([cx_c - 30, cy_c - 18, cx_c + 30, cy_c + 18],
-                         outline=hex2rgb(TXT_FAINT), width=3)
-            draw.ellipse([cx_c - 10, cy_c - 10, cx_c + 10, cy_c + 10],
-                         fill=hex2rgb(TXT_FAINT))
-            # Slash line
-            draw.line([(cx_c - 35, cy_c - 25), (cx_c + 35, cy_c + 25)],
-                      fill=hex2rgb(TXT_FAINT), width=3)
-            _draw_text(draw, cx_c, cy_c + 45, "Camera Hidden",
-                       size=18, fill=TXT_FAINT, bold=True, anchor="mm")
-            _draw_text(draw, cx_c, cy_c + 72, "Press H to show",
-                       size=13, fill=TXT_FAINT, anchor="mm")
+            draw.ellipse([cx_c - 30, cy_c - 18, cx_c + 30, cy_c + 18], outline=hex2rgb(TXT_FAINT), width=3)
+            draw.ellipse([cx_c - 10, cy_c - 10, cx_c + 10, cy_c + 10], fill=hex2rgb(TXT_FAINT))
+            draw.line([(cx_c - 35, cy_c - 25), (cx_c + 35, cy_c + 25)], fill=hex2rgb(TXT_FAINT), width=3)
+            _draw_text(draw, cx_c, cy_c + 45, "Camera Hidden", size=18, fill=TXT_FAINT, bold=True, anchor="mm")
+            _draw_text(draw, cx_c, cy_c + 72, "Press H to show", size=13, fill=TXT_FAINT, anchor="mm")
+            self._draw_camera_controls(img, draw, cam_x, cam_y, cam_w, cam_h)
             return
 
         with self._cam_lock:
             pil_cam = self._cam_pil
 
         if pil_cam is not None:
-            # ── Letterbox: maintain original aspect ratio ──
+            # ── Letterbox ──
             orig_w, orig_h = pil_cam.size
             aspect = orig_w / orig_h
 
             if cam_w / cam_h > aspect:
-                # Card is wider → fit to height
                 new_h = cam_h
                 new_w = int(cam_h * aspect)
             else:
-                # Card is taller → fit to width
                 new_w = cam_w
                 new_h = int(cam_w / aspect)
 
             offset_x = cam_x + (cam_w - new_w) // 2
             offset_y = cam_y + (cam_h - new_h) // 2
 
-            # Fill background for letterbox bars
-            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_IN))
-
             resized = pil_cam.resize((new_w, new_h), Image.LANCZOS)
-            # Rounded clip mask
+            
+            # Subtle grid overlay
+            grid = Image.new("RGBA", (new_w, new_h), (0,0,0,0))
+            gd = ImageDraw.Draw(grid)
+            grid_color = (255, 255, 255, 15)
+            for gy in range(0, new_h, 40):
+                gd.line([(0, gy), (new_w, gy)], fill=grid_color, width=1)
+            for gx in range(0, new_w, 40):
+                gd.line([(gx, 0), (gx, new_h)], fill=grid_color, width=1)
+            resized = Image.alpha_composite(resized.convert("RGBA"), grid).convert("RGB")
+
             mask_c = Image.new("L", (new_w, new_h), 0)
             md = ImageDraw.Draw(mask_c)
-            md.rounded_rectangle([0, 0, new_w, new_h], radius=10, fill=255)
+            md.rounded_rectangle([0, 0, new_w, new_h], radius=14, fill=255)
             img.paste(resized, (offset_x, offset_y), mask_c)
 
-            # ── Calibration Overlay ──
+            # Subtle blue glow/border
+            draw.rounded_rectangle([offset_x, offset_y, offset_x + new_w, offset_y + new_h], radius=14, outline=hex2rgb(ACC_BLUE), width=2)
+
+            # ── Badges ──
+            # Top-left badge: CAM-01 • ACTIVE FEED
+            tl_x = offset_x + 16
+            tl_y = offset_y + 16
+            tl_w = 200
+            tl_h = 32
+            draw_pill(draw, tl_x, tl_y, tl_w, tl_h, CARD_DARK)
+            # semi-transparent by using solid color since we can't easily alpha composite here without extra steps, 
+            # let's just use CARD_DARK which looks good
+            draw.ellipse([tl_x + 12, tl_y + 12, tl_x + 20, tl_y + 20], fill=hex2rgb(ACC_GREEN))
+            _draw_text(draw, tl_x + 30, tl_y + 16, "CAM-01 • ACTIVE FEED", size=11, fill=WHITE, bold=True, anchor="lm")
+
+            # Top-right badge: Shield + Target Locked
+            if target_person_lock is not None or is_calibrating:
+                tr_w = 280
+                tr_x = offset_x + new_w - tr_w - 16
+                tr_y = offset_y + 16
+                draw_pill(draw, tr_x, tr_y, tr_w, tl_h, CARD_DARK)
+                # Shield icon mock
+                draw.polygon([(tr_x+16, tr_y+10), (tr_x+24, tr_y+10), (tr_x+24, tr_y+20), (tr_x+20, tr_y+24), (tr_x+16, tr_y+20)], outline=hex2rgb(ACC_BLUE), width=2)
+                _draw_text(draw, tr_x + 32, tr_y + 16, "TARGET LOCKED (FSL: RIGHT HAND)", size=11, fill=WHITE, bold=True, anchor="lm")
+
+            # Bottom-right: CAM-01 • 1080p FHD
+            br_txt = "CAM-01 • 1080p FHD"
+            _draw_text(draw, offset_x + new_w - 16, offset_y + new_h - 20, br_txt, size=12, fill=WHITE, bold=True, anchor="rm")
+
+            # Calibration Guide
             if is_calibrating:
-                # Draw animated target silhouette guide
                 sil_cx = offset_x + new_w // 2
                 sil_cy = offset_y + new_h // 2 - 20
-                # Head oval
-                draw.ellipse([sil_cx - 50, sil_cy - 75, sil_cx + 50, sil_cy + 35],
-                             outline=hex2rgb(ACC_BLUE), width=3)
-                # Shoulders arc
-                draw.arc([sil_cx - 120, sil_cy + 10, sil_cx + 120, sil_cy + 180],
-                         start=180, end=360, fill=hex2rgb(ACC_BLUE), width=3)
+                draw.ellipse([sil_cx - 50, sil_cy - 75, sil_cx + 50, sil_cy + 35], outline=hex2rgb(ACC_BLUE), width=3)
+                draw.arc([sil_cx - 120, sil_cy + 10, sil_cx + 120, sil_cy + 180], start=180, end=360, fill=hex2rgb(ACC_BLUE), width=3)
 
-                # Instruction Banner
                 banner_h = 36
-                banner_y = offset_y + new_h - banner_h - 15
-                _rounded_rect(draw, offset_x + 20, banner_y, new_w - 40, banner_h, 18, hex2rgb(ACC_NAVY))
-                _draw_text(draw, sil_cx, banner_y + banner_h//2,
-                           f"Calibrating Target Person... {calibration_progress:.0f}%",
-                           size=13, fill=WHITE, bold=True, anchor="mm")
+                banner_y = offset_y + new_h - banner_h - 85
+                _rounded_rect(draw, offset_x + 60, banner_y, new_w - 120, banner_h, 18, hex2rgb(CARD_DARK))
+                _draw_text(draw, sil_cx, banner_y + banner_h//2, f"Calibrating Target Person... {calibration_progress:.0f}%", size=13, fill=WHITE, bold=True, anchor="mm")
 
-                # Calibration Progress Bar
-                bar_w_cal = int((new_w - 60) * (calibration_progress / 100.0))
+                bar_w_cal = int((new_w - 140) * (calibration_progress / 100.0))
                 if bar_w_cal > 0:
-                    _rounded_rect(draw, offset_x + 30, banner_y + banner_h - 5, bar_w_cal, 4, 2, hex2rgb(ACC_BLUE2))
-
-            elif target_person_lock is not None:
-                # Target Locked Badge in top left of camera
-                badge_x = offset_x + 12
-                badge_y = offset_y + 12
-                _rounded_rect(draw, badge_x, badge_y, 130, 26, 13, hex2rgb(ACC_NAVY))
-                draw.ellipse([badge_x + 10, badge_y + 8, badge_x + 18, badge_y + 16], fill=hex2rgb(ACC_GREEN))
-                _draw_text(draw, badge_x + 24, badge_y + 13, "TARGET LOCKED",
-                           size=11, fill=WHITE, bold=True, anchor="lm")
+                    _rounded_rect(draw, offset_x + 70, banner_y + banner_h - 5, bar_w_cal, 4, 2, hex2rgb(ACC_BLUE2))
         else:
-            # Placeholder while camera loads
-            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_IN))
-            _draw_text(draw, cam_x + cam_w//2, cam_y + cam_h//2,
-                       "Camera Loading...", size=16, fill=TXT_FAINT, anchor="mm")
+            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_DARK))
+            _draw_text(draw, cam_x + cam_w//2, cam_y + cam_h//2, "Camera Loading...", size=16, fill=TXT_FAINT, anchor="mm")
+
+        self._draw_camera_controls(img, draw, cam_x, cam_y, cam_w, cam_h)
+
+    # ── Bottom-center camera control row: only the 3 buttons that actually do something ──
+    def _draw_camera_controls(self, img, draw, cam_x, cam_y, cam_w, cam_h):
+        btn_d   = 44
+        gap     = 14
+        n       = 3
+        total_w = n * btn_d + (n - 1) * gap
+        start_x = cam_x + (cam_w - total_w) // 2
+        cy      = cam_y + cam_h - btn_d - 20
+
+        # store rects for hit-testing in _on_click
+        self._cam_btn_rects = {}
+
+        specs = [
+            ("cam",  "N", False),                        # switch camera (no persistent "on" state)
+            ("eye",  "H", camera_hidden),                 # camera visibility toggle
+            ("lock", "K", is_calibrating or target_person_lock is not None),  # calibrate / target lock
+        ]
+
+        for i, (key, hint, active) in enumerate(specs):
+            bx = start_x + i * (btn_d + gap)
+            by = cy
+            self._cam_btn_rects[key] = (bx, by, bx + btn_d, by + btn_d)
+
+            bg = ICON_BG_ON if active else "#1A2033"
+            fg = ACC_BLUE if active else WHITE
+            draw.ellipse([bx, by, bx + btn_d, by + btn_d], fill=hex2rgb(bg))
+
+            ccx, ccy = bx + btn_d // 2, by + btn_d // 2
+            if key == "cam":
+                # simple camera glyph
+                draw.rounded_rectangle([ccx-10, ccy-7, ccx+10, ccy+7], radius=3, outline=hex2rgb(fg), width=2)
+                draw.ellipse([ccx-4, ccy-4, ccx+4, ccy+4], outline=hex2rgb(fg), width=2)
+            elif key == "eye":
+                if camera_hidden:
+                    draw.line([(ccx-11, ccy-9), (ccx+11, ccy+9)], fill=hex2rgb(fg), width=2)
+                draw.ellipse([ccx-11, ccy-7, ccx+11, ccy+7], outline=hex2rgb(fg), width=2)
+                draw.ellipse([ccx-3, ccy-3, ccx+3, ccy+3], fill=hex2rgb(fg))
+            elif key == "lock":
+                # target/shield glyph
+                draw.polygon([(ccx-9, ccy-8), (ccx+9, ccy-8), (ccx+9, ccy+4),
+                             (ccx, ccy+11), (ccx-9, ccy+4)], outline=hex2rgb(fg), width=2)
+
+            # small keybind label under the button
+            _draw_text(draw, ccx, by + btn_d + 12, hint, size=9, fill=TXT_FAINT, bold=True, anchor="mm")
 
     # ─────────────────────────────────────────────────────
     #  RIGHT PANEL — BMO + Detection Pipeline + Stability
@@ -1658,7 +1752,7 @@ class ShieldFSLApp:
 
         # ── BMO Card ──
         bmo_h = 90
-        draw_neu_card(draw, x, y, w, bmo_h, r=18, bg=CARD, depth=6)
+        draw_shadow_card(draw, x, y, w, bmo_h, r=18, bg=CARD, shadow_color=SHADOW, offset_y=4)
 
         # BMO avatar image (square, rounded)
         aw = 58; ah = 58
@@ -1669,47 +1763,48 @@ class ShieldFSLApp:
             mask_b = Image.new("L", (aw, ah), 0)
             mbd    = ImageDraw.Draw(mask_b)
             mbd.rounded_rectangle([0, 0, aw, ah], radius=12, fill=255)
-            # Green bg behind avatar
             _rounded_rect(draw, ax, ay, aw, ah, 12, hex2rgb(BMO_GREEN))
             img.paste(resized_bmo, (ax, ay), mask_b)
         else:
             _rounded_rect(draw, ax, ay, aw, ah, 12, hex2rgb(BMO_GREEN))
-            _draw_text(draw, ax+aw//2, ay+ah//2, "BMO", size=12,
-                       fill=WHITE, bold=True, anchor="mm")
+            _draw_text(draw, ax+aw//2, ay+ah//2, "BMO", size=12, fill=WHITE, bold=True, anchor="mm")
 
-        # BMO label + status dot
+        # BMO labels
         label_x  = ax + aw + 16
-        _draw_text(draw, label_x, y + bmo_h//2 - 6, "BMO",
-                   size=18, fill=TXT_DARK, bold=True, anchor="lm")
-        _bmo_dot = ACC_GREEN if not tts_is_speaking else "#F0A040"
-        draw.ellipse([label_x + 46, y+bmo_h//2-12,
-                      label_x + 56, y+bmo_h//2-2],
-                     fill=hex2rgb(_bmo_dot))
-        _draw_text(draw, label_x, y + bmo_h//2 + 12,
-                   "Speaking..." if tts_is_speaking else "Online",
-                   size=12, fill=TXT_MID, anchor="lm")
+        _draw_text(draw, label_x, y + bmo_h//2 - 12, "BMO Companion", size=16, fill=TXT_DARK, bold=True, anchor="lm")
+        
+        # ONLINE badge
+        bx = label_x + 130
+        draw_pill(draw, bx, y + bmo_h//2 - 20, 60, 18, "#E6F6EC")
+        draw.ellipse([bx + 6, y + bmo_h//2 - 14, bx + 12, y + bmo_h//2 - 8], fill=hex2rgb(ACC_GREEN))
+        _draw_text(draw, bx + 16, y + bmo_h//2 - 11, "ONLINE", size=9, fill=ACC_GREEN, bold=True, anchor="lm")
+
+        # Subtitle
+        sub_text = "Speaking translation..." if tts_is_speaking else "Listening for gesture stability..."
+        _draw_text(draw, label_x, y + bmo_h//2 + 10, sub_text, size=11, fill=TXT_MID, anchor="lm")
 
         # Waveform icon (right side of BMO card)
-        wfx = x + w - 50
-        wfy = y + bmo_h//2
-        for i, amp in enumerate([4, 8, 12, 8, 4, 10, 6]):
-            xi = wfx + i * 6
-            draw.line([(xi, wfy-amp), (xi, wfy+amp)],
-                      fill=hex2rgb(ACC_BLUE), width=2)
+        wfx = x + w - 40
+        wfy = y + bmo_h//2 + 10
+        for i, amp in enumerate([3, 6, 9, 6, 3, 7, 4]):
+            xi = wfx + i * 4
+            draw.line([(xi, wfy-amp), (xi, wfy+amp)], fill=hex2rgb(ACC_BLUE), width=2)
 
         # ── Detection Pipeline Card ──
         det_y = y + bmo_h + pad
         det_h = h - bmo_h - pad
-        draw_neu_card(draw, x, det_y, w, det_h, r=18, bg=CARD, depth=6)
+        draw_shadow_card(draw, x, det_y, w, det_h, r=18, bg=CARD, shadow_color=SHADOW, offset_y=4)
 
-        _draw_text(draw, x + w//2, det_y + 28, "DETECTION PIPELINE",
-                   size=11, fill=TXT_MID, anchor="mm")
+        # Header
+        _draw_text(draw, x + 20, det_y + 24, "DETECTION PIPELINE", size=11, fill=TXT_MID, bold=True, anchor="lm")
+        _draw_text(draw, x + w - 20, det_y + 24, "INFERENCE ACTIVE", size=11, fill=ACC_GREEN, bold=True, anchor="rm")
+        draw.ellipse([x + w - 140, det_y + 19, x + w - 130, det_y + 29], fill=hex2rgb(ACC_GREEN))
 
         # Big ring
         ring_cx = x + w // 2
         ring_cy = det_y + det_h // 2 - 30
         ring_r  = min(w, det_h) // 4
-        ring_r  = max(50, min(ring_r, 90))
+        ring_r  = max(60, min(ring_r, 110))
 
         # Compute value for ring
         current_time = time.time()
@@ -1740,29 +1835,31 @@ class ShieldFSLApp:
                 ring_col = ACC_BLUE
             ring_lbl = debug_motion_word.upper() if debug_motion_word != "--" else "-"
 
-        # Draw bg ring
-        thickness = max(10, ring_r // 6)
-        box = [ring_cx - ring_r, ring_cy - ring_r,
-               ring_cx + ring_r, ring_cy + ring_r]
-        draw.arc(box, 0, 360, fill=hex2rgb(SHADOW_D), width=thickness)
-        if frac > 0.5:
-            end_a = -90 + 360 * (frac / 100.0)
-            draw.arc(box, -90, end_a, fill=hex2rgb(ring_col), width=thickness)
+        # Draw gradient ring
+        thickness = max(12, ring_r // 5)
+        draw_progress_arc(draw, ring_cx, ring_cy, ring_r, thickness, frac, 100.0, ring_col, bg_color="#F0F3F8", is_gradient=True, end_color=ACC_CYAN if ring_col == ACC_BLUE else None)
 
         # Letter/word in centre
-        _draw_text(draw, ring_cx, ring_cy, ring_lbl,
-                   size=52, fill=TXT_DARK, bold=True, anchor="mm")
+        _draw_text(draw, ring_cx, ring_cy, ring_lbl, size=64, fill=TXT_DARK, bold=True, anchor="mm")
+        
+        # FSL LETTER label
+        _draw_text(draw, ring_cx, ring_cy + ring_r + 20, "FSL LETTER" if current_mode == 1 else "FSL WORD", size=12, fill=TXT_MID, bold=True, anchor="mm")
 
         # ── Confidence progress bar ──
         conf_val = (frac if current_mode == 1 else debug_motion_conf)
-        bar_y = ring_cy + ring_r + 28
+        bar_y = ring_cy + ring_r + 55
         bar_x = x + 28
-        bar_w = w - 96
-        bar_h = 14
-        _draw_gradient_bar(img, draw, bar_x, bar_y, bar_w, bar_h,
-                           conf_val / 100.0, ACC_BLUE, ACC_BLUE2)
-        _draw_text(draw, bar_x + bar_w + 10, bar_y + bar_h // 2,
-                   f"{conf_val:.0f}%", size=13, fill=TXT_MID, anchor="lm")
+        bar_w = w - 56
+        bar_h = 8
+        
+        _draw_text(draw, bar_x, bar_y - 12, "Neural Confidence", size=11, fill=TXT_MID, anchor="lm")
+        _draw_text(draw, bar_x + bar_w, bar_y - 12, f"{conf_val:.1f}%", size=11, fill=ACC_CYAN, bold=True, anchor="rm")
+        
+        _rounded_rect(draw, bar_x, bar_y, bar_w, bar_h, bar_h//2, hex2rgb("#F0F3F8"))
+        if conf_val > 0:
+            fill_w = int(bar_w * (conf_val / 100.0))
+            if fill_w > 0:
+                _draw_gradient_bar(img, draw, bar_x, bar_y, fill_w, bar_h, 1.0, ACC_BLUE, ACC_CYAN)
 
     # ─────────────────────────────────────────────────────
     #  STATS ROW
@@ -1773,56 +1870,93 @@ class ShieldFSLApp:
         h     = self.STATS_H
         W     = self.W
 
-        # Full-width neumorphic strip
-        draw_neu_card(draw, pad, y, W - pad*2, h, r=14, bg=CARD, depth=4)
+        # Full-width clean card
+        draw_shadow_card(draw, pad, y, W - pad*2, h, r=14, bg=CARD, shadow_color=SHADOW, offset_y=3)
 
-        # Stats slots
-        slots = [
-            (f"{node_count}", "Nodes", ACC_BLUE),
-            (f"{fps_value:.0f}", "FPS", ACC_GREEN),
-            ("Letters" if current_mode == 1 else "Words", "Mode", ACC_PURPLE),
-        ]
-        n_slots = len(slots) + 1  # +1 for stability bar
-        slot_w = (W - pad*2) // n_slots
-
-        for i, (val, unit, col) in enumerate(slots):
-            sx = pad + i * slot_w + 28
-            # Colored dot indicator
-            draw.ellipse([sx, y + h//2 - 4, sx + 8, y + h//2 + 4],
-                         fill=hex2rgb(col))
-            # Value
-            _draw_text(draw, sx + 18, y + h//2 - 1, val,
-                       size=16, fill=TXT_DARK, bold=True, anchor="lm")
-            # Unit
-            val_w = len(val) * 10 + 4
-            _draw_text(draw, sx + 18 + val_w, y + h//2 - 1,
-                       unit, size=13, fill=TXT_MID, anchor="lm")
-
-            # Vertical divider
-            if i < len(slots):
-                dx = pad + (i + 1) * slot_w
-                draw.line([(dx, y + 12), (dx, y + h - 12)],
-                          fill=hex2rgb(SHADOW_D), width=1)
-
-        # ── Stability bar (right section) ──
-        stab_x = pad + len(slots) * slot_w + 20
-        _draw_text(draw, stab_x, y + h//2, "Stability",
-                   size=13, fill=TXT_MID, anchor="lm")
-        bar_x2 = stab_x + 90
-        bar_w2 = W - pad - bar_x2 - 40
-        stab_y = y + h//2 - 7
-        stab_h = 14
         stab_val = min(debug_motion_conf / 100.0 if current_mode == 2
                        else (min((time.time() - stable_start_time) /
                                  STABILIZATION_DELAY, 1.0)
                              if current_frame_prediction else 0.0), 1.0)
-        _draw_gradient_bar(img, draw, bar_x2, stab_y, max(bar_w2, 50), stab_h,
-                           stab_val, ACC_BLUE, ACC_BLUE2)
-        # Dot indicator
-        dot_x = bar_x2 + max(bar_w2, 50) + 14
-        dot_col2 = ACC_BLUE if stab_val > 0.5 else TXT_FAINT
-        draw.ellipse([dot_x - 6, stab_y + 1, dot_x + 6, stab_y + stab_h - 1],
-                     fill=hex2rgb(dot_col2))
+
+        slots = [
+            ("NEURAL LANDMARKS", f"{node_count} Nodes", ACC_BLUE, "nodes"),
+            ("AMBIENT LUX", f"{int(lux_value)} Lux", ACC_AMBER, "lux"),
+            ("FOCAL DISTANCE", f"{int(dist_cm)} cm", ACC_PURPLE, "dist"),
+        ]
+
+        n_slots = 4
+        slot_w = (W - pad*2) // n_slots
+
+        for i, (label, val, col, icon_type) in enumerate(slots):
+            sx = pad + i * slot_w + 30
+            # Label
+            _draw_text(draw, sx, y + h//2 - 12, label, size=10, fill=TXT_MID, bold=True, anchor="lm")
+            # Value
+            _draw_text(draw, sx, y + h//2 + 10, val, size=18, fill=TXT_DARK, bold=True, anchor="lm")
+
+            # Polished icon badge container
+            ic_x = sx + slot_w - 75
+            ic_y = y + (h - 32) // 2
+            cx, cy = ic_x + 16, ic_y + 16
+
+            if icon_type == "nodes":
+                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
+                                       fill=hex2rgb("#EFF6FF"), outline=hex2rgb("#BFDBFE"), width=1)
+                draw.line([(cx-6, cy+5), (cx, cy-6)], fill=hex2rgb(ACC_BLUE), width=2)
+                draw.line([(cx+6, cy+5), (cx, cy-6)], fill=hex2rgb(ACC_BLUE), width=2)
+                draw.line([(cx-6, cy+5), (cx+6, cy+5)], fill=hex2rgb(ACC_BLUE), width=2)
+                draw.ellipse([cx-8, cy+3, cx-4, cy+7], fill=hex2rgb(ACC_BLUE))
+                draw.ellipse([cx+4, cy+3, cx+8, cy+7], fill=hex2rgb(ACC_BLUE))
+                draw.ellipse([cx-2, cy-8, cx+2, cy-4], fill=hex2rgb(ACC_BLUE))
+            elif icon_type == "lux":
+                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
+                                       fill=hex2rgb("#FFFBEB"), outline=hex2rgb("#FDE68A"), width=1)
+                draw.ellipse([cx-5, cy-5, cx+5, cy+5], fill=hex2rgb(ACC_AMBER))
+                draw.line([(cx-8, cy), (cx-6, cy)], fill=hex2rgb(ACC_AMBER), width=2)
+                draw.line([(cx+6, cy), (cx+8, cy)], fill=hex2rgb(ACC_AMBER), width=2)
+                draw.line([(cx, cy-8), (cx, cy-6)], fill=hex2rgb(ACC_AMBER), width=2)
+                draw.line([(cx, cy+6), (cx, cy+8)], fill=hex2rgb(ACC_AMBER), width=2)
+            elif icon_type == "dist":
+                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
+                                       fill=hex2rgb("#FAF5FF"), outline=hex2rgb("#E9D5FF"), width=1)
+                draw.line([(cx-7, cy-6), (cx-7, cy+6)], fill=hex2rgb(ACC_PURPLE), width=2)
+                draw.line([(cx+7, cy-6), (cx+7, cy+6)], fill=hex2rgb(ACC_PURPLE), width=2)
+                draw.line([(cx-7, cy), (cx+7, cy)], fill=hex2rgb(ACC_PURPLE), width=1)
+                draw.ellipse([cx-2, cy-2, cx+2, cy+2], fill=hex2rgb(ACC_PURPLE))
+
+            # Vertical divider
+            if i < len(slots):
+                dx = pad + (i + 1) * slot_w
+                draw.line([(dx, y + 15), (dx, y + h - 15)], fill=hex2rgb("#EAECEF"), width=1)
+
+        # ── Stability section (right section) ──
+        stab_sx = pad + 3 * slot_w + 30
+        _draw_text(draw, stab_sx, y + h//2 - 12, "KINEMATIC STABILITY", size=10, fill=TXT_MID, bold=True, anchor="lm")
+        rms_val = max(0.0, 0.1 - (stab_val * 0.1))
+        _draw_text(draw, stab_sx, y + h//2 + 10, f"{rms_val:.2f} RMS", size=18, fill=TXT_DARK, bold=True, anchor="lm")
+
+        # Stability pulse badge
+        ic_x = stab_sx + slot_w - 75
+        ic_y = y + (h - 32) // 2
+        cx, cy = ic_x + 16, ic_y + 16
+        draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
+                               fill=hex2rgb("#ECFDF5"), outline=hex2rgb("#A7F3D0"), width=1)
+        draw.line([(cx-9, cy), (cx-5, cy), (cx-2, cy-6), (cx+1, cy+6), (cx+4, cy-3), (cx+6, cy), (cx+9, cy)],
+                  fill=hex2rgb(ACC_GREEN), width=2)
+
+        bar_x2 = stab_sx + 110
+        bar_w2 = slot_w - 200
+        stab_y = y + h//2 + 6
+        stab_h = 8
+
+        _rounded_rect(draw, bar_x2, stab_y, bar_w2, stab_h, stab_h//2, hex2rgb("#F0F3F8"))
+        if stab_val > 0:
+            fill_w = int(bar_w2 * stab_val)
+            if fill_w > 0:
+                _draw_gradient_bar(img, draw, bar_x2, stab_y, fill_w, stab_h, 1.0, ACC_GREEN, ACC_CYAN)
+
+        dot_col2 = ACC_GREEN if stab_val > 0.5 else TXT_FAINT
+        draw.ellipse([bar_x2 + bar_w2 + 8, stab_y + 1, bar_x2 + bar_w2 + 14, stab_y + 7], fill=hex2rgb(dot_col2))
 
     # ─────────────────────────────────────────────────────
     #  BOTTOM OUTPUT BAR
@@ -1835,56 +1969,97 @@ class ShieldFSLApp:
         y    = H - h - pad
         r    = 18
 
-        draw_neu_card(draw, pad, y, W - pad*2, h, r=r, bg=CARD, depth=6)
+        draw_shadow_card(draw, pad, y, W - pad*2, h, r=r, bg=CARD, shadow_color=SHADOW, offset_y=4)
+
+        # ── Left: FSL OUTPUT Badge ──
+        out_x  = pad + 24
+        out_y  = y + 24
+        
+        # Gradient badge
+        bw, bh = 100, 24
+        grad, mask = gradient_pill(draw, 0, 0, bw, bh, ACC_BLUE, ACC_CYAN)
+        img.paste(grad, (out_x, out_y), mask)
+        _draw_text(draw, out_x + bw//2, out_y + bh//2, "FSL OUTPUT", size=10, fill=WHITE, bold=True, anchor="mm")
 
         # ── Large text output field ──
-        out_x  = pad + 24
-        out_y  = y + 16
         out_h  = 54
-        spk_w  = 150
+        spk_w  = 200
         out_w  = W - pad*2 - spk_w - 80
-
-        draw_neu_card(draw, out_x, out_y, out_w, out_h, r=14,
-                      bg=CARD_IN, depth=3, inset=True)
-
+        
         display = typed_output[-60:] if len(typed_output) > 60 else typed_output
-        _draw_text(draw, out_x + 18, out_y + out_h//2, display or "",
-                   size=28, fill=TXT_DARK, bold=True, anchor="lm")
+        _draw_text(draw, out_x, out_y + bh + 24, display or "", size=36, fill=TXT_DARK, bold=True, anchor="lm")
 
         # Cursor blink
         if int(now * 2) % 2 == 0:
-            cx_est = out_x + 18 + len(display) * 16
+            cx_est = out_x + len(display) * 20 + 4
             cx_est = min(cx_est, out_x + out_w - 10)
-            draw.line([(cx_est, out_y + 10), (cx_est, out_y + out_h - 10)],
-                      fill=hex2rgb(ACC_BLUE), width=3)
+            draw.line([(cx_est, out_y + bh + 4), (cx_est, out_y + bh + 44)], fill=hex2rgb(ACC_BLUE), width=4)
 
-        # ── SPEAK button ──
+        # ── Right: SPEAK OUTPUT Button ──
         spk_h = 50
         spk_x = W - pad - 24 - spk_w
-        spk_y = out_y + (out_h - spk_h) // 2
-        _rounded_rect(draw, spk_x, spk_y, spk_w, spk_h,
-                      spk_h//2, hex2rgb(ACC_NAVY))
-        _draw_text(draw, spk_x + spk_w//2, spk_y + spk_h//2, "Speak",
-                   size=16, fill=WHITE, bold=True, anchor="mm")
-        # Small waveform icon inside speak button
-        for i, amp in enumerate([4, 8, 12, 8, 4]):
-            xi = spk_x + 20 + i * 6
-            cy2 = spk_y + spk_h // 2
-            draw.line([(xi, cy2-amp), (xi, cy2+amp)],
-                      fill=hex2rgb(WHITE), width=2)
+        spk_y = y + 24
+
+        # ── Determine speak button visual state ──
+        is_clicking = time.time() < self._spk_click_until
+        is_hovering = self._spk_hover and not is_clicking
+
+        # Click: press-in — shrink pill by 2px and shift down 1px
+        # Hover: brighten gradient end + glow ring
+        if is_clicking:
+            px, py, pw, ph = spk_x + 2, spk_y + 1, spk_w - 4, spk_h - 2
+            c1, c2 = "#1650B8", "#00A8CC"   # darker = pressed
+        elif is_hovering:
+            px, py, pw, ph = spk_x - 2, spk_y - 2, spk_w + 4, spk_h + 4
+            c1, c2 = ACC_BLUE2, "#40E4FF"   # lighter = lifted
+        else:
+            px, py, pw, ph = spk_x, spk_y, spk_w, spk_h
+            c1, c2 = ACC_BLUE, ACC_CYAN
+
+        # Hover glow ring — soft translucent halo drawn before the pill
+        if is_hovering:
+            glow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            gd   = ImageDraw.Draw(glow)
+            gd.rounded_rectangle([px - 6, py - 6, px + pw + 6, py + ph + 6],
+                                  radius=(ph + 12) // 2,
+                                  fill=(64, 180, 255, 35))
+            gd.rounded_rectangle([px - 3, py - 3, px + pw + 3, py + ph + 3],
+                                  radius=(ph + 6) // 2,
+                                  fill=(64, 180, 255, 25))
+            # img is RGB — composite via a temporary RGBA copy
+            base_rgba = img.convert("RGBA")
+            base_rgba.alpha_composite(glow)
+            img.paste(base_rgba.convert("RGB"))
+
+        # Gradient speak button
+        s_grad, s_mask = gradient_pill(draw, 0, 0, pw, ph, c1, c2)
+        img.paste(s_grad, (px, py), s_mask)
+
+        # Label — centred on the (possibly shifted) pill
+        lbl_x = px + pw // 2 + 10
+        lbl_y = py + ph // 2
+        _draw_text(draw, lbl_x, lbl_y, "SPEAK OUTPUT", size=14, fill=WHITE, bold=True, anchor="mm")
+
+        # Waveform bars — taller on hover, shorter on click
+        bar_amps = ([3, 6, 9, 6, 3] if is_clicking else
+                    [6, 11, 16, 11, 6] if is_hovering else
+                    [4, 8, 12, 8, 4])
+        for i, amp in enumerate(bar_amps):
+            xi  = px + 28 + i * 6
+            cy2 = py + ph // 2
+            draw.line([(xi, cy2 - amp), (xi, cy2 + amp)], fill=hex2rgb(WHITE), width=2)
 
         # ── Footer line ──
-        footer_y = y + h - 20
-        _draw_text(draw, pad + 24, footer_y, "SHIELD FSL",
-                   size=11, fill=TXT_FAINT, anchor="lm")
+        footer_y = y + h - 24
+        draw.line([(pad + 24, footer_y - 10), (W - pad - 24, footer_y - 10)], fill=hex2rgb("#EAECEF"), width=1)
+        
+        _draw_text(draw, pad + 24, footer_y, "SHIELD FSL Neural Engine • 2025 Release", size=11, fill=TXT_FAINT, anchor="lm")
 
-        # Keybind hints (compact)
-        hints = "Space · Bksp · Enter=Speak · H=Camera · C=Clear"
-        _draw_text(draw, W // 2, footer_y, hints,
-                   size=10, fill=TXT_FAINT, anchor="mm")
+        # Keybind hints — only the bindings that are actually wired up in _on_key
+        hints = "SPACE  Add space   •   BKSP  Delete   •   ENTER  Speak   •   C  Clear"
+        _draw_text(draw, W // 2, footer_y, hints, size=11, fill=TXT_MID, bold=True, anchor="mm")
 
-        _draw_text(draw, W - pad - 24, footer_y, "© 2025",
-                   size=11, fill=TXT_FAINT, anchor="rm")
+        _draw_text(draw, W - pad - 24, footer_y, "De La Salle-CSB FSL Verified", size=11, fill=TXT_FAINT, anchor="rm")
 
     # ─────────────────────────────────────────────────────
     #  NOTIFICATION TOAST (optimized — no pixel loop)
@@ -1992,6 +2167,32 @@ def _draw_text(draw, x, y, text, size=14, fill=TXT_DARK,
         draw.text((x, y), text, font=f, fill=hex2rgb(fill), anchor=anchor)
     except Exception:
         draw.text((x, y), text, font=f, fill=hex2rgb(fill))
+
+def _draw_gradient_text(img, x, y, text, size=14, c1_hex=ACC_BLUE, c2_hex=ACC_CYAN,
+                        bold=True, anchor="lm"):
+    """Draw text filled with a horizontal gradient by rendering it as a mask."""
+    if not text:
+        return
+    f = _get_font(size, bold)
+    tmp = Image.new("L", (1, 1), 0)
+    tmp_draw = ImageDraw.Draw(tmp)
+    bbox = tmp_draw.textbbox((0, 0), text, font=f, anchor=anchor)
+    tw = max(1, bbox[2] - bbox[0])
+    th = max(1, bbox[3] - bbox[1])
+
+    mask = Image.new("L", (tw, th), 0)
+    md = ImageDraw.Draw(mask)
+    md.text((-bbox[0], -bbox[1]), text, font=f, fill=255, anchor=anchor)
+
+    grad = Image.new("RGB", (tw, th))
+    gd = ImageDraw.Draw(grad)
+    c1, c2 = hex2rgb(c1_hex), hex2rgb(c2_hex)
+    for i in range(tw):
+        t = i / max(tw - 1, 1)
+        gd.line([(i, 0), (i, th)], fill=_blend(c1, c2, t))
+
+    img.paste(grad, (int(x + bbox[0]), int(y + bbox[1])), mask)
+
 
 def _draw_dashed_rect(draw, x, y, w, h, color, dash=8, gap=5):
     """Draw a dashed rectangle outline."""
