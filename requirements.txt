@@ -1,6 +1,6 @@
 opencv-python==4.14.0.94
 opencv-contrib-python==4.11.0.86
-mediapipe==0.10.14
+mediapipe
 tensorflow==2.19.1
 scikit-learn==1.9.1
 numpy==2.1.3

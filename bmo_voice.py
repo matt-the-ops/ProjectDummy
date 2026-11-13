@@ -5,6 +5,7 @@ Requires: torch, torchaudio, edge-tts, pygame, transformers,
           librosa, soundfile, faiss-cpu, praat-parselmouth, scipy
 """
 import os, sys, io, time, asyncio, threading, logging
+from collections import OrderedDict
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -38,6 +39,11 @@ _net_g            = None
 _faiss_index      = None
 _bmo_loaded       = False
 _load_lock        = threading.Lock()
+
+# ─── Bounded TTS cache ────────────────────────────────────────────────────────
+_TTS_CACHE_MAX = 32
+_tts_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
+_tts_cache_lock = threading.Lock()
 
 # ─── RVC Synthesizer (SynthesizerTrnMs768NSFsid v2) ──────────────────────────
 def _load_synthesizer(cpt):
@@ -177,16 +183,51 @@ def load_bmo_models():
         return True
 
 # ─── Public: text → BMO audio bytes (mp3 via edge-tts → RVC) ─────────────────
+_TTS_VOICE = "en-US-AnaNeural"
+_TTS_PITCH = "+5Hz"
+_TTS_RATE  = "+8%"
+
 async def _synthesize_raw(text: str) -> bytes:
-    """Generate base speech bytes (mp3) using edge-tts."""
+    """Generate base speech bytes (mp3) using edge-tts (cached by text/voice settings)."""
     import edge_tts
-    comm = edge_tts.Communicate(text, voice="en-US-AnaNeural",
-                                pitch="+5Hz", rate="+8%")
+    key = (text, _TTS_VOICE, _TTS_PITCH, _TTS_RATE)
+    with _tts_cache_lock:
+        cached = _tts_cache.get(key)
+        if cached is not None:
+            _tts_cache.move_to_end(key)
+            return cached
+    comm = edge_tts.Communicate(text, voice=_TTS_VOICE,
+                                pitch=_TTS_PITCH, rate=_TTS_RATE)
     buf = bytearray()
     async for chunk in comm.stream():
         if chunk["type"] == "audio":
             buf.extend(chunk["data"])
-    return bytes(buf)
+    data = bytes(buf)
+    with _tts_cache_lock:
+        _tts_cache[key] = data
+        _tts_cache.move_to_end(key)
+        while len(_tts_cache) > _TTS_CACHE_MAX:
+            _tts_cache.popitem(last=False)
+    return data
+
+def _play_pcm16(out_audio: np.ndarray, tgt_sr: int) -> None:
+    """Normalise → PCM16 WAV → pygame playback, waiting for completion."""
+    import pygame
+    if not pygame.mixer.get_init():
+        pygame.mixer.init(frequency=tgt_sr, size=-16, channels=1, buffer=2048)
+
+    peak = np.abs(out_audio).max()
+    if peak > 0:
+        out_audio = out_audio / peak
+    out_audio = (out_audio * 32767).astype(np.int16)
+
+    sound_io = io.BytesIO()
+    sf.write(sound_io, out_audio, tgt_sr, format="WAV", subtype="PCM_16")
+    sound_io.seek(0)
+    pygame.mixer.music.load(sound_io)
+    pygame.mixer.music.play()
+    while pygame.mixer.music.get_busy():
+        time.sleep(0.04)
 
 def speak_bmo(text: str, f0_up_key: int = 0, index_ratio: float = 0.75) -> bool:
     """
@@ -195,12 +236,13 @@ def speak_bmo(text: str, f0_up_key: int = 0, index_ratio: float = 0.75) -> bool:
     Should be called from a background thread (non-blocking caller).
     """
     try:
-        import pygame
         # 1. Synthesize base TTS
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        mp3_bytes = loop.run_until_complete(_synthesize_raw(text))
-        loop.close()
+        try:
+            asyncio.set_event_loop(loop)
+            mp3_bytes = loop.run_until_complete(_synthesize_raw(text))
+        finally:
+            loop.close()
 
         # 2. Decode mp3 → float32 numpy
         audio_buf = io.BytesIO(mp3_bytes)
@@ -209,23 +251,8 @@ def speak_bmo(text: str, f0_up_key: int = 0, index_ratio: float = 0.75) -> bool:
         # 3. RVC voice conversion to BMO
         out_audio, tgt_sr = _vc_audio(src_audio, src_sr, f0_up_key, index_ratio)
 
-        # Normalise output
-        peak = np.abs(out_audio).max()
-        if peak > 0:
-            out_audio /= peak
-        out_audio = (out_audio * 32767).astype(np.int16)
-
         # 4. Playback via pygame
-        if not pygame.get_init():
-            pygame.mixer.init(frequency=tgt_sr, size=-16, channels=1, buffer=2048)
-
-        sound_io = io.BytesIO()
-        sf.write(sound_io, out_audio, tgt_sr, format="WAV", subtype="PCM_16")
-        sound_io.seek(0)
-        pygame.mixer.music.load(sound_io)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            time.sleep(0.04)
+        _play_pcm16(out_audio, tgt_sr)
         return True
 
     except Exception as e:

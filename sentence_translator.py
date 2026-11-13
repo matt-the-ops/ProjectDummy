@@ -15,7 +15,9 @@ class FSLSentenceTranslator:
         - "Thank you help"     -> "Thank you for your help."
     """
 
-    IDIO_PATTERNS = [
+    # Precompiled at class definition time: identical pattern strings, identical
+    # order and first-match semantics as the original re.match loop.
+    IDIO_PATTERNS = [(re.compile(pattern), replacement) for pattern, replacement in [
         # ── Conjoint You + I / We Actions ──
         (r'^(you i|i you|you and i|you me|me you) work now$', "Let's start working."),
         (r'^(you i|i you|you and i|you me|me you) work$', "Let's work together."),
@@ -106,7 +108,7 @@ class FSLSentenceTranslator:
         (r'^(i don\'t know|i not know)$', "I don't know."),
         (r'^(i understand)$', "I understand."),
         (r'^(i not understand)$', "I don't understand."),
-    ]
+    ]]
 
     PRONOUNS_SUBJ = {'i', 'you', 'he', 'she', 'it', 'we', 'they'}
     BE_FORMS = {'am', 'is', 'are', 'was', 'were', 'be', 'being', 'been'}
@@ -140,6 +142,26 @@ class FSLSentenceTranslator:
     def __init__(self):
         pass
 
+    # ─── Bounded memoization ────────────────────────────────────────────────
+    # Guards pure translate() results. Insertion-ordered dict evicts the oldest
+    # entry once the cap is reached (deterministic, no external deps).
+    _MEMO_MAX = 512
+    _memo: dict[tuple, str] = {}
+
+    @classmethod
+    def _memo_get(cls, key: tuple):
+        return cls._memo.get(key)
+
+    @classmethod
+    def _translate_cached_key(cls, key: tuple) -> str:
+        """translate() entry for a pre-cleaned token tuple (recursion helper)."""
+        return default_translator.translate(list(key))
+
+    @classmethod
+    def clear_translation_cache(cls) -> None:
+        """Invalidate all memoized translation results."""
+        cls._memo.clear()
+
     def clean_tokens(self, text_or_tokens) -> list[str]:
         """Cleans and tokenizes input words or string."""
         if isinstance(text_or_tokens, str):
@@ -165,17 +187,35 @@ class FSLSentenceTranslator:
         if not tokens:
             return ""
 
+        # Canonical key: pure function of the cleaned tokens, shared by the
+        # memoized and uncached paths (greeting decomposition recurses via the
+        # same key form, so sub-results are cached too).
+        key = tuple(tokens) if isinstance(text_or_tokens, str) else ('@seq', tuple(tokens))
+
+        hit = self._memo_get(key)
+        if hit is not None:
+            return hit
+
+        result = self._translate_uncached(tokens)
+
+        if len(self._memo) >= self._MEMO_MAX:
+            self._memo.pop(next(iter(self._memo)))
+        self._memo[key] = result
+        return result
+
+    def _translate_uncached(self, tokens: list[str]) -> str:
+        """Unmemoized translation core; identical logic/order to the original."""
         query = " ".join(tokens)
 
         # 1. Check exact pattern matches
         for pattern, replacement in self.IDIO_PATTERNS:
-            if re.match(pattern, query):
+            if pattern.match(query):
                 return replacement
 
         # 2. Greeting prefix decomposition (e.g. "Hello who you" -> "Hello, who are you?")
         if len(tokens) > 1 and tokens[0] in {'hello', 'hi', 'hey'}:
             greeting = tokens[0].capitalize()
-            rest_translated = self.translate(tokens[1:])
+            rest_translated = self._translate_cached_key(tuple(tokens[1:]))
             if rest_translated:
                 words = rest_translated.split()
                 fw = words[0]
@@ -186,7 +226,7 @@ class FSLSentenceTranslator:
         # 2b. Two-word greeting prefix ("good morning", "good afternoon", etc.)
         if len(tokens) > 2 and tokens[0] == 'good' and tokens[1] in {'morning', 'afternoon', 'evening', 'night', 'day'}:
             greeting = f"Good {tokens[1]}"
-            rest_translated = self.translate(tokens[2:])
+            rest_translated = self._translate_cached_key(tuple(tokens[2:]))
             if rest_translated:
                 words = rest_translated.split()
                 fw = words[0]
