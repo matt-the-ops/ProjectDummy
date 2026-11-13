@@ -22,6 +22,7 @@ import numpy as np
 import threading
 import asyncio
 import io
+import queue
 import tkinter as tk
 from tkinter import font as tkfont
 from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageFont
@@ -79,81 +80,120 @@ def _init_audio():
         except Exception:
             _pygame_initialized = False
 
-def speak_text(text):
+def _speak_now(clean):
+    """Synthesize and play one utterance. Runs on the persistent TTS worker thread."""
+    spoken = False
+    try:
+        import edge_tts
+        import pygame
+        _init_audio()
+
+        async def _synthesize():
+            comm = edge_tts.Communicate(clean, voice="en-US-AnaNeural",
+                                        pitch="+20Hz", rate="+12%")
+            mp3_data = bytearray()
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    mp3_data.extend(chunk["data"])
+            return bytes(mp3_data)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            audio_bytes = loop.run_until_complete(_synthesize())
+        finally:
+            loop.close()
+        if audio_bytes:
+            sound_io = io.BytesIO(audio_bytes)
+            pygame.mixer.music.load(sound_io)
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.04)
+            spoken = True
+    except Exception:
+        spoken = False
+
+    if not spoken:
+        try:
+            import pythoncom, win32com.client
+            pythoncom.CoInitialize()
+            try:
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                for v in speaker.GetVoices():
+                    if "zira" in v.GetDescription().lower():
+                        speaker.Voice = v
+                        break
+                escaped = (clean.replace("&", "&amp;")
+                           .replace("<", "&lt;").replace(">", "&gt;"))
+                xml = f'<pitch absmiddle="12"><rate absspeed="2">{escaped}</rate></pitch>'
+                speaker.Speak(xml, 8)
+                spoken = True
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+    if not spoken:
+        try:
+            engine = pyttsx3.init()
+            for v in engine.getProperty('voices'):
+                if 'zira' in v.name.lower() or 'female' in v.name.lower():
+                    engine.setProperty('voice', v.id)
+                    break
+            engine.setProperty('rate', 190)
+            engine.say(clean)
+            engine.runAndWait()
+            engine.stop()
+        except Exception as e:
+            print(f"TTS Error: {e}")
+
+_tts_queue = None
+_tts_worker_thread = None
+_tts_queue_lock = threading.Lock()
+_TTS_MAX_PENDING = 4
+
+def _tts_worker_loop():
+    """Single persistent worker: drains the queue serially so utterances never overlap."""
     global tts_is_speaking
+    while True:
+        text = _tts_queue.get()
+        if text is None:
+            return
+        tts_is_speaking = True
+        try:
+            _speak_now(text)
+        except Exception as e:
+            print(f"TTS Error: {e}")
+        finally:
+            tts_is_speaking = False
+
+def _ensure_tts_worker():
+    global _tts_queue, _tts_worker_thread
+    with _tts_queue_lock:
+        if _tts_worker_thread is not None and _tts_worker_thread.is_alive():
+            return
+        _tts_queue = queue.Queue()
+        _tts_worker_thread = threading.Thread(
+            target=_tts_worker_loop, daemon=True, name="BMO-TTS-Worker")
+        _tts_worker_thread.start()
+
+def speak_text(text):
+    """Enqueue text for the persistent TTS worker (non-blocking, thread-safe)."""
+    global _tts_queue
     clean = text.strip()
     if not clean:
         return
-
-    def _run():
-        global tts_is_speaking
-        with _tts_lock:
-            tts_is_speaking = True
-            spoken = False
-            try:
-                import edge_tts
-                import pygame
-                _init_audio()
-
-                async def _synthesize():
-                    comm = edge_tts.Communicate(clean, voice="en-US-AnaNeural",
-                                                pitch="+20Hz", rate="+12%")
-                    mp3_data = bytearray()
-                    async for chunk in comm.stream():
-                        if chunk["type"] == "audio":
-                            mp3_data.extend(chunk["data"])
-                    return bytes(mp3_data)
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                audio_bytes = loop.run_until_complete(_synthesize())
-                loop.close()
-                if audio_bytes:
-                    sound_io = io.BytesIO(audio_bytes)
-                    pygame.mixer.music.load(sound_io)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        time.sleep(0.04)
-                    spoken = True
-            except Exception:
-                spoken = False
-
-            if not spoken:
-                try:
-                    import pythoncom, win32com.client
-                    pythoncom.CoInitialize()
-                    try:
-                        speaker = win32com.client.Dispatch("SAPI.SpVoice")
-                        for v in speaker.GetVoices():
-                            if "zira" in v.GetDescription().lower():
-                                speaker.Voice = v
-                                break
-                        escaped = (clean.replace("&", "&amp;")
-                                   .replace("<", "&lt;").replace(">", "&gt;"))
-                        xml = f'<pitch absmiddle="12"><rate absspeed="2">{escaped}</rate></pitch>'
-                        speaker.Speak(xml, 8)
-                        spoken = True
-                    finally:
-                        pythoncom.CoUninitialize()
-                except Exception:
-                    pass
-
-            if not spoken:
-                try:
-                    engine = pyttsx3.init()
-                    for v in engine.getProperty('voices'):
-                        if 'zira' in v.name.lower() or 'female' in v.name.lower():
-                            engine.setProperty('voice', v.id)
-                            break
-                    engine.setProperty('rate', 190)
-                    engine.say(clean)
-                    engine.runAndWait()
-                    engine.stop()
-                except Exception as e:
-                    print(f"TTS Error: {e}")
-            tts_is_speaking = False
-
-    threading.Thread(target=_run, daemon=True).start()
+    _ensure_tts_worker()
+    q = _tts_queue
+    if q is None:
+        return
+    # Drop stale pending requests if the backlog grows too large (keep newest)
+    while q.qsize() >= _TTS_MAX_PENDING:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
+    q.put(clean)
 
 # ─────────────────────────────────────────────
 #  Paths
@@ -899,6 +939,8 @@ class ShieldFSLApp:
         # Camera HUD overlay cache (static badges, buttons — only redrawn on state change)
         self._cached_hud_overlay = None
         self._cached_hud_key = None
+        # Camera crop dirty-flag: skip rebuild when source frame + state unchanged
+        self._cam_render_key = None
 
         # Right panel dirty-flag cache: avoid re-rendering unless content changed
         self._right_panel_dirty = True
@@ -921,6 +963,7 @@ class ShieldFSLApp:
         self._cam_photo  = None
         self._cam_lock   = threading.Lock()
         self._cam_pil    = None  # latest PIL camera frame
+        self._cam_seq    = 0     # increments on every published camera frame
 
         # Cached BMO ImageTk
         self._bmo_idle_tk = None
@@ -1311,7 +1354,18 @@ class ShieldFSLApp:
             model_complexity=0,
         ) as holistic:
 
+            # ── Inference throttling (decouple ML from camera/display rate) ──
+            # Camera feed is repainted every loop (~30 FPS) but MediaPipe inference
+            # is capped near _ML_INFER_FPS to cut CPU/thermal load on the RPi 4.
+            _ML_INFER_FPS     = 15.0
+            _ML_MIN_INTERVAL  = 1.0 / _ML_INFER_FPS
+            _DISPLAY_INTERVAL = 1.0 / 30.0
+            infer_interval    = _ML_MIN_INTERVAL
+            prev_results      = None
+            last_infer_t      = 0.0
+
             while self._running:
+                _iter_start = time.time()
                 ret, frame = cam_capture.read()
                 if not ret or frame is None:
                     time.sleep(0.005)
@@ -1325,12 +1379,64 @@ class ShieldFSLApp:
                 # 320x240 retains landmark accuracy while cutting processing overhead by 75%
                 mp_w, mp_h = 320, 240
                 rgb_small = cv2.resize(rgb, (mp_w, mp_h), interpolation=cv2.INTER_LINEAR)
-                results   = holistic.process(rgb_small)
+
+                now = time.time()
+                do_infer = (prev_results is None) or ((now - last_infer_t) >= infer_interval)
+
+                if not do_infer:
+                    # Display-only frame: reuse previous landmarks, skip MediaPipe + prediction.
+                    results = prev_results
+                    mean_brightness = float(np.mean(rgb_small[::4, ::4]))
+                    raw_lux = (mean_brightness / 255.0) ** 1.8 * 2000.0
+                    lux_value = lux_value * 0.85 + raw_lux * 0.15
+                    draw_frame = rgb
+                    if results is not None:
+                        if results.face_landmarks:
+                            mp_drawing.draw_landmarks(
+                                draw_frame, results.face_landmarks,
+                                mp_holistic.FACEMESH_CONTOURS,
+                                landmark_drawing_spec=None,
+                                connection_drawing_spec=mp_drawing.DrawingSpec(
+                                    color=(20, 60, 20), thickness=1))
+                        if results.left_hand_landmarks:
+                            mp_drawing.draw_landmarks(
+                                draw_frame, results.left_hand_landmarks,
+                                mp_holistic.HAND_CONNECTIONS,
+                                mp_drawing.DrawingSpec(color=(80, 255, 140),
+                                                       thickness=2, circle_radius=4),
+                                mp_drawing.DrawingSpec(color=(30, 200, 80), thickness=2))
+                        if results.right_hand_landmarks:
+                            mp_drawing.draw_landmarks(
+                                draw_frame, results.right_hand_landmarks,
+                                mp_holistic.HAND_CONNECTIONS,
+                                mp_drawing.DrawingSpec(color=(100, 255, 100),
+                                                       thickness=2, circle_radius=4),
+                                mp_drawing.DrawingSpec(color=(60, 220, 60), thickness=2))
+                    pil_cam = Image.fromarray(draw_frame)
+                    with self._cam_lock:
+                        self._cam_pil = pil_cam
+                        self._cam_seq += 1
+                    _sleep = _DISPLAY_INTERVAL - (time.time() - _iter_start)
+                    if _sleep > 0:
+                        time.sleep(_sleep)
+                    continue
+
+                # ── Inference path (runs at <= _ML_INFER_FPS) ──
+                _it0 = time.time()
+                results = holistic.process(rgb_small)
+                infer_ms = (time.time() - _it0) * 1000.0
+                last_infer_t = time.time()
+                prev_results = results
+                # Adaptive skip: back off further if a single inference is slow.
+                if infer_ms > 33.0:
+                    infer_interval = min(0.12, infer_interval * 1.2)
+                else:
+                    infer_interval = max(_ML_MIN_INTERVAL, infer_interval * 0.9)
 
                 # Target Lock-In & Calibration Filter
                 validate_and_filter_target(results)
 
-                # FPS
+                # FPS (inference cadence)
                 now = time.time()
                 fps_value = 1.0 / max(now - _prev_t, 1e-6)
                 _prev_t   = now
@@ -1665,26 +1771,27 @@ class ShieldFSLApp:
                 pil_cam = Image.fromarray(draw_frame)
                 with self._cam_lock:
                     self._cam_pil = pil_cam
+                    self._cam_seq += 1
 
-    # ── GUI render loop (runs on main thread @ ~60 FPS) ─────────────
+                # Pace display updates to ~30 FPS to avoid duplicate-frame work.
+                _sleep = _DISPLAY_INTERVAL - (time.time() - _iter_start)
+                if _sleep > 0:
+                    time.sleep(_sleep)
+
+    # ── GUI render loop (runs on main thread @ ~30 FPS) ─────────────
     def _gui_loop(self):
         if not self._running:
             return
         t_start = time.time()
         try:
             self._render()
-            if self.partner_window and getattr(self.partner_window, '_running', False):
-                # Throttle partner window: update every ~100ms (10 FPS) to free up primary window
-                now = time.time()
-                last_p_render = getattr(self.partner_window, '_last_render_t', 0.0)
-                if now - last_p_render >= 0.10:
-                    self.partner_window._render()
-                    self.partner_window._last_render_t = now
+            # Partner window now self-schedules its own _gui_loop (see NonFSLWindow),
+            # so it no longer consumes this window's frame budget.
         except Exception as e:
             print(f"[Render Error] {e}")
         elapsed_ms = int((time.time() - t_start) * 1000)
-        delay = max(1, 16 - elapsed_ms)
-        self.root.after(delay, self._gui_loop)   # ~60 fps target
+        delay = max(1, 33 - elapsed_ms)          # ~30 FPS target (leaves CPU headroom)
+        self.root.after(delay, self._gui_loop)
 
     # ── Master render ────────────────────────────────────
     def _pre_render_ui_shell(self):
@@ -1915,6 +2022,9 @@ class ShieldFSLApp:
         # 3. Update Camera Viewport Sub-image
         self._draw_left_panel(now)
 
+        # Yield to Tk between heavy phases so queued button clicks are not starved.
+        self.root.update_idletasks()
+
         # 4. Update Right Companion Panel Sub-image (throttled + dirty-flag for max FPS)
         active_pred = current_frame_prediction if current_mode == 1 else debug_motion_word
         right_key = (tts_is_speaking, id(self.received_message), active_pred, current_mode)
@@ -1923,6 +2033,9 @@ class ShieldFSLApp:
             self._draw_right_panel(now)
             self._right_cache_key = right_key
             self._right_last_update = now
+
+        # Yield again after the right panel composite (also expensive PIL work).
+        self.root.update_idletasks()
 
         # 5. Update Stats Row Texts & Kinematic Stability Bar
         mx, my, mw, mh = self.PAD, self.METRICS_Y, self.W - self.PAD * 2, self.METRICS_H
@@ -2001,16 +2114,10 @@ class ShieldFSLApp:
 
         with self._cam_lock:
             pil_cam = self._cam_pil
+            cam_seq = self._cam_seq
 
-        if camera_hidden:
-            sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
-            s_draw = ImageDraw.Draw(sub_img)
-            _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
-            _draw_text(s_draw, vw // 2, vh // 2 - 14, "Camera Feed Hidden", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
-            _draw_text(s_draw, vw // 2, vh // 2 + 18, "Press H to show", size=14, fill=TEXT_FAINT, bold=False, anchor="mm")
-            offset_x, offset_y, new_w, new_h = vx, vy, vw, vh
-            cam_crop = sub_img
-        elif pil_cam is not None:
+        # ── Geometry only (cheap; computed every frame for positioning/hit-testing) ──
+        if pil_cam is not None and not camera_hidden:
             orig_w, orig_h = pil_cam.size
             aspect = orig_w / max(orig_h, 1)
             if vw / vh > aspect:
@@ -2019,34 +2126,10 @@ class ShieldFSLApp:
             else:
                 new_w = vw
                 new_h = int(vw / aspect)
-
-            resized = pil_cam.resize((new_w, new_h), Image.Resampling.NEAREST)
             offset_x = vx + (vw - new_w) // 2
             offset_y = vy + (vh - new_h) // 2
-
-            # Cached mask for high-speed rendering
-            mask_key = (new_w, new_h, vr)
-            if self._cached_cam_mask_key != mask_key:
-                mask = Image.new("L", (new_w, new_h), 0)
-                m_draw = ImageDraw.Draw(mask)
-                m_draw.rounded_rectangle([0, 0, new_w, new_h], radius=vr, fill=255)
-                self._cached_cam_mask = mask
-                self._cached_cam_mask_key = mask_key
-            else:
-                mask = self._cached_cam_mask
-
-            cam_crop = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
-            cam_crop.paste(resized, (0, 0), mask)
-            draw = ImageDraw.Draw(cam_crop)
-            draw.rounded_rectangle([0, 0, new_w - 1, new_h - 1],
-                                   radius=vr, outline=hex2rgb("#60A5FA"), width=1)
         else:
-            sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
-            s_draw = ImageDraw.Draw(sub_img)
-            _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
-            _draw_text(s_draw, vw // 2, vh // 2, "Connecting Camera...", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
             offset_x, offset_y, new_w, new_h = vx, vy, vw, vh
-            cam_crop = sub_img
 
         # ── Overlay HUD (cached unless state changes) ──────────────────────────
         # Key: button states + size + calibration state
@@ -2096,18 +2179,57 @@ class ShieldFSLApp:
             self._cached_hud_overlay = hud
             self._cached_hud_key = hud_key
 
-        # Composite: paste HUD overlay onto camera frame
-        if not camera_hidden and pil_cam is not None:
-            cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
+        # ── Dirty-flag: rebuild the composited camera image only when it changes ──
+        # Skips the expensive resize/mask/paste/PhotoImage work when the GUI renders
+        # faster than the camera/ML loop produces new frames.
+        cam_key = (0 if camera_hidden else cam_seq, hud_key, camera_hidden, self.ui_scale,
+                   new_w, new_h, offset_x, offset_y)
+        if cam_key != self._cam_render_key:
+            if camera_hidden:
+                sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
+                s_draw = ImageDraw.Draw(sub_img)
+                _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
+                _draw_text(s_draw, vw // 2, vh // 2 - 14, "Camera Feed Hidden", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
+                _draw_text(s_draw, vw // 2, vh // 2 + 18, "Press H to show", size=14, fill=TEXT_FAINT, bold=False, anchor="mm")
+                cam_crop = sub_img
+            elif pil_cam is not None:
+                resized = pil_cam.resize((new_w, new_h), Image.Resampling.NEAREST)
 
-        # Scale cam_crop to match ui_scale for canvas
-        scaled_w = max(1, int(new_w * self.ui_scale))
-        scaled_h = max(1, int(new_h * self.ui_scale))
-        if scaled_w != new_w or scaled_h != new_h:
-            cam_crop = cam_crop.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+                # Cached mask for high-speed rendering
+                mask_key = (new_w, new_h, vr)
+                if self._cached_cam_mask_key != mask_key:
+                    mask = Image.new("L", (new_w, new_h), 0)
+                    m_draw = ImageDraw.Draw(mask)
+                    m_draw.rounded_rectangle([0, 0, new_w, new_h], radius=vr, fill=255)
+                    self._cached_cam_mask = mask
+                    self._cached_cam_mask_key = mask_key
+                else:
+                    mask = self._cached_cam_mask
 
-        self.cam_tk = ImageTk.PhotoImage(cam_crop)
-        self.canvas.itemconfig(self.cam_image_id, image=self.cam_tk)
+                cam_crop = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+                cam_crop.paste(resized, (0, 0), mask)
+                draw = ImageDraw.Draw(cam_crop)
+                draw.rounded_rectangle([0, 0, new_w - 1, new_h - 1],
+                                       radius=vr, outline=hex2rgb("#60A5FA"), width=1)
+                # Composite cached HUD overlay onto camera frame
+                cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
+            else:
+                sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
+                s_draw = ImageDraw.Draw(sub_img)
+                _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
+                _draw_text(s_draw, vw // 2, vh // 2, "Connecting Camera...", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
+                cam_crop = sub_img
+
+            # Scale cam_crop to match ui_scale for canvas
+            scaled_w = max(1, int(new_w * self.ui_scale))
+            scaled_h = max(1, int(new_h * self.ui_scale))
+            if scaled_w != new_w or scaled_h != new_h:
+                cam_crop = cam_crop.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+
+            self.cam_tk = ImageTk.PhotoImage(cam_crop)
+            self.canvas.itemconfig(self.cam_image_id, image=self.cam_tk)
+            self._cam_render_key = cam_key
+
         self.canvas.coords(self.cam_image_id, self.ui_ox + int(offset_x * self.ui_scale), self.ui_oy + int(offset_y * self.ui_scale))
 
     def _draw_camera_controls_onto_crop(self, img, draw, new_w, new_h, offset_x, offset_y):

@@ -190,10 +190,12 @@ class NonFSLWindow:
         # Register with Co-Op Bus
         coop_hub.register_partner_listener(self._on_signer_message_received)
 
-        # Start GUI render loop only if running standalone (in two-way mode, ShieldFSLApp drives render)
+        # Always self-schedule the render loop. Standalone (no master) targets ~30 FPS;
+        # when embedded alongside the main window it throttles to ~15 FPS so it does not
+        # starve the primary GUI thread (both share the one Tk main loop).
         self._running = True
-        if master is None:
-            self.window.after(100, self._gui_loop)
+        self._render_fps = 30.0 if master is None else 15.0
+        self.window.after(100, self._gui_loop)
 
     # ── Logo loader (identical to ShieldFSLApp) ─────────────────────────────────
     def _load_logo(self):
@@ -385,7 +387,8 @@ class NonFSLWindow:
             print(f"[Partner Render Error] {e}")
             traceback.print_exc()
         elapsed_ms = int((time.time() - t_start) * 1000)
-        delay = max(1, 33 - elapsed_ms)  # Target ~30 FPS for partner window
+        target_ms = int(1000.0 / max(1.0, getattr(self, '_render_fps', 30.0)))
+        delay = max(1, target_ms - elapsed_ms)  # self-throttled partner render cadence
         self.window.after(delay, self._gui_loop)
 
     # ── Dynamic Master Render ──────────────────────────────────────────────────
