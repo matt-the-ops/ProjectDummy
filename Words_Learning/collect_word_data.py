@@ -1,5 +1,6 @@
 import os
 import cv2
+import json
 import shutil
 import time
 import math
@@ -16,6 +17,8 @@ except ModuleNotFoundError:
 ROOT_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH      = os.path.join(ROOT_DIR, 'data', 'word_dataset')
 MODELS_DIR     = os.path.join(ROOT_DIR, 'models')
+ICONS_DIR      = os.path.join(ROOT_DIR, 'assets', 'fsl_icons')
+ICON_MAP_FILE  = os.path.join(ROOT_DIR, 'icon_map.json')
 
 SEQUENCE_LEN   = 40       # hand motion frames
 HAND_FEATURES  = 198      # 126 shape + 36 spatial anchors + 12 facial emotion + 18 per-frame velocities/speeds/direction ratios + 6 trajectory
@@ -252,6 +255,90 @@ def remove_outdated_models():
             except Exception as e:
                 print(f"[!] Could not remove '{f}': {e}")
 
+
+
+# --- Icon Map Management -----------------------------------------------------
+
+def load_icon_map():
+    """Load icon_map.json, return as dict. Returns {} if missing."""
+    if os.path.exists(ICON_MAP_FILE):
+        try:
+            with open(ICON_MAP_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[!] Could not read icon_map.json: {e}")
+    return {}
+
+def save_icon_map(icon_map):
+    """Save dict back to icon_map.json with pretty formatting."""
+    try:
+        with open(ICON_MAP_FILE, 'w') as f:
+            json.dump(icon_map, f, indent=2)
+    except Exception as e:
+        print(f"[!] Could not save icon_map.json: {e}")
+
+def manage_word_icon(word_name):
+    """
+    Interactive prompt to assign, replace, or remove an icon PNG for a word.
+    Called automatically after recording a new word.
+    """
+    os.makedirs(ICONS_DIR, exist_ok=True)
+    icon_map = load_icon_map()
+    word_key = word_name.lower()
+    existing = icon_map.get(word_key)
+
+    print(f"\n--- Icon Manager for '{word_name}' ---")
+    if existing:
+        print(f"  Current icon : {existing}")
+    else:
+        print("  No icon assigned yet.")
+
+    print("  1. Add / Replace icon PNG")
+    print("  2. Remove icon")
+    print("  3. Skip (keep as is)")
+
+    choice = input("  Select (1-3): ").strip()
+
+    if choice == '1':
+        src = input("  Full path to your PNG file: ").strip().strip('"').strip("'")
+        if not src or not os.path.isfile(src):
+            print("  [!] File not found. Skipping icon assignment.")
+            return
+        if not src.lower().endswith('.png'):
+            print("  [!] Only PNG files are supported. Skipping.")
+            return
+        dest_name = f"{word_key}.png"
+        dest_path = os.path.join(ICONS_DIR, dest_name)
+        try:
+            import shutil as _shutil
+            _shutil.copy2(src, dest_path)
+            icon_map[word_key] = f"assets/fsl_icons/{dest_name}"
+            save_icon_map(icon_map)
+            print(f"  [OK] Icon saved ? {dest_path}")
+            print(f"  [OK] icon_map.json updated: '{word_key}' ? 'assets/fsl_icons/{dest_name}'")
+        except Exception as e:
+            print(f"  [!] Failed to copy icon: {e}")
+
+    elif choice == '2':
+        if word_key in icon_map:
+            old_icon = icon_map.pop(word_key)
+            save_icon_map(icon_map)
+            print(f"  [OK] Removed icon entry for '{word_key}' from icon_map.json.")
+            # Optionally delete the file too
+            old_file = os.path.join(ROOT_DIR, old_icon)
+            if os.path.exists(old_file):
+                del_file = input(f"  Also delete the image file '{old_icon}'? (y/n): ").strip().lower()
+                if del_file == 'y':
+                    try:
+                        os.remove(old_file)
+                        print(f"  [OK] Deleted icon file: {old_file}")
+                    except Exception as e:
+                        print(f"  [!] Could not delete file: {e}")
+        else:
+            print(f"  [!] No icon entry found for '{word_key}' in icon_map.json.")
+
+    else:
+        print("  [~] Icon unchanged.")
 
 def reset_single_word(word_name):
     target_dir = os.path.join(DATA_PATH, word_name)
@@ -582,10 +669,17 @@ def main():
                 ns = input("Number of samples (default 20): ").strip()
                 ns = int(ns) if ns.isdigit() else 20
                 record_word(wn, ns)
+                manage_word_icon(wn)
         elif choice == '2':
             wn = input("Word to DELETE: ").strip().lower()
             if wn:
                 reset_single_word(wn)
+                # Auto-remove icon entry when word is deleted
+                _imap = load_icon_map()
+                if wn in _imap:
+                    _imap.pop(wn)
+                    save_icon_map(_imap)
+                    print(f"[OK] Removed icon entry for '{wn}' from icon_map.json.")
         elif choice == '3':
             c = input("Delete ALL words? (y/n): ").strip().lower()
             if c == 'y':

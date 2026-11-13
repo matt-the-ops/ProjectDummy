@@ -1,0 +1,14 @@
+{
+  "hello": "assets/fsl_icons/hello.png",
+  "you": "assets/fsl_icons/you.png",
+  "i": "assets/fsl_icons/i.png",
+  "family": "assets/fsl_icons/family.png",
+  "friend": "assets/fsl_icons/friend.png",
+  "good": "assets/fsl_icons/good.png",
+  "help": "assets/fsl_icons/help.png",
+  "no": "assets/fsl_icons/no.png",
+  "please": "assets/fsl_icons/please.png",
+  "sorry": "assets/fsl_icons/sorry.png",
+  "thank_you": "assets/fsl_icons/thank_you.png",
+  "yes": "assets/fsl_icons/yes.png"
+}

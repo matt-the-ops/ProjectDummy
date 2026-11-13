@@ -4,6 +4,15 @@ Single 1920×1080 window, matching the SHIELD FSL reference design.
 """
 
 import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import sys
+import ctypes
+try:
+    if sys.platform.startswith("win"):
+        ctypes.windll.winmm.timeBeginPeriod(1)
+except Exception:
+    pass
+import datetime
 import cv2
 import math
 import pickle
@@ -19,6 +28,9 @@ from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageFont
 import pyttsx3
 import tensorflow as tf
 from tensorflow.keras.models import load_model
+from sentence_translator import translate_sentence
+from coop_bus import coop_hub
+from non_fsl_window import NonFSLWindow
 
 try:
     import mediapipe.solutions.holistic as mp_holistic
@@ -444,29 +456,54 @@ def extract_face_frame(results):
 # ─────────────────────────────────────────────
 #  Modern Colour Palette (Project B.M.O)
 # ─────────────────────────────────────────────
-# Tkinter hex colours
-BG_TOP      = "#FFFFFF"      # gradient bg top
-BG_BOT      = "#E6EAF2"      # gradient bg bot
-CARD        = "#FFFFFF"      # clean white card
-CARD_DARK   = "#0D1117"      # camera feed dark card
-SHADOW      = "#D0D6E2"      # clean drop shadow
-SHADOW_D    = "#F0F3F8"      # light track color used by gradient progress bars
-ICON_BG     = "#F0F3F8"      # neutral background for icon buttons
-ICON_BG_ON  = "#E7F0FF"      # active/lit icon button background
-TXT_DARK    = "#1A1A24"      # primary text
-TXT_MID     = "#6E7182"      # secondary text
-TXT_FAINT   = "#989BA8"      # hint text
-WHITE       = "#FFFFFF"
+# Tkinter hex colours & Neumorphic Palette (Modernized Sky Blue)
+BG_LIGHT      = "#D2E8FE"   # Luminous fresh sky blue canvas
+BG_CENTER     = "#E4F3FE"   # Soft center ambient highlight
+BG_DEEP       = "#C0DEFD"   # Rich pastel blue
 
-ACC_BLUE    = "#2064E0"      # primary accent (buttons, etc.)
-ACC_BLUE2   = "#4D94FF"      # lighter blue gradient part
-ACC_CYAN    = "#00D4FF"      # detection ring gradient target
-ACC_NAVY    = "#1A2033"      # dark pills
-ACC_GREEN   = "#1DB954"      # online dot / steady
-ACC_RED     = "#E53935"      # disagree / record
-ACC_AMBER   = "#FFA000"      # warning / cooldown
-ACC_PURPLE  = "#8A2BE2"
-BMO_GREEN   = "#22C55E"      # BMO avatar
+CARD_BG       = "#FFFFFF"   # Luminous frosted glass card body
+CARD_BORDER   = "#FFFFFF"   # Specular white rim highlight
+CARD_RIM_SUB  = "#D2E4F8"   # Subtle bottom rim line
+CARD_SHADOW   = "#7BAADF"   # Rich sky-blue diffused drop shadow (NOT grey!)
+
+BLUE_PRIMARY  = "#1D68FE"   # Vibrant electric cobalt blue (matches Photoshop title & buttons)
+BLUE_LIGHT    = "#4F9BFE"   # Bright electric azure
+BLUE_CYAN     = "#38BDF8"   # Sky cyan highlight
+BLUE_DARK     = "#1050E2"   # Deep active cobalt
+
+TEXT_MAIN     = "#0F172A"   # Crisp high-contrast obsidian slate
+TEXT_MUTED    = "#5A718F"   # Cool slate gray for subtitles/labels
+TEXT_FAINT    = "#8FA8C4"   # Refined placeholder text
+WHITE         = "#FFFFFF"
+
+GREEN_ONLINE  = "#10B981"   # Mint green status dot
+GREEN_BG      = "#ECFDF5"   # Mint pill background
+GREEN_BORDER  = "#A7F3D0"   # Mint pill border
+GREEN_TEXT    = "#059669"   # Mint pill text
+
+DOCK_DARK_BG  = (22, 36, 60, 185)  # Dark translucent glass overlay on video
+
+# Legacy aliases for compatibility
+BG_TOP      = BG_LIGHT
+BG_BOT      = BG_DEEP
+CARD        = CARD_BG
+CARD_DARK   = "#0B132B"
+SHADOW      = CARD_SHADOW
+SHADOW_D    = "#DCEBF9"
+ICON_BG     = "#E6F1FC"
+ICON_BG_ON  = "#DBEAFE"
+TXT_DARK    = TEXT_MAIN
+TXT_MID     = TEXT_MUTED
+TXT_FAINT   = TEXT_FAINT
+ACC_BLUE    = BLUE_PRIMARY
+ACC_BLUE2   = BLUE_LIGHT
+ACC_CYAN    = BLUE_CYAN
+ACC_NAVY    = "#16243C"
+ACC_GREEN   = GREEN_ONLINE
+ACC_RED     = "#EF4444"
+ACC_AMBER   = "#F59E0B"
+ACC_PURPLE  = "#8B5CF6"
+BMO_GREEN   = "#22C55E"
 
 
 # ─────────────────────────────────────────────
@@ -481,6 +518,51 @@ def _blend(c1, c2, t):
 
 def rgb2hex(r, g, b):
     return f"#{r:02x}{g:02x}{b:02x}"
+
+def draw_glass_card(img: Image.Image, x, y, w, h, r=26,
+                    bg_color=CARD_BG, shadow_color=CARD_SHADOW,
+                    border_color=CARD_BORDER, shadow_offset=(0, 9),
+                    shadow_blur=20, shadow_alpha=115):
+    """
+    Renders an authentic neumorphic-glassmorphic card:
+    - Multi-layered soft diffused ambient sky-blue shadow (floating depth)
+    - Crisp specular glass white rim highlight
+    - Clean luminous white-to-ice gradient card fill
+    """
+    pad = shadow_blur * 2
+    sw = w + pad * 2
+    sh = h + pad * 2
+    
+    shadow_img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow_img)
+    sc = hex2rgb(shadow_color)
+    
+    sx0 = pad
+    sy0 = pad + shadow_offset[1]
+    sdraw.rounded_rectangle([sx0, sy0, sx0 + w, sy0 + h], radius=r, fill=sc + (shadow_alpha,))
+    shadow_blurred = shadow_img.filter(ImageFilter.GaussianBlur(shadow_blur))
+    
+    img.paste(shadow_blurred, (x - pad, y - pad), shadow_blurred)
+    
+    card_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(card_img)
+    
+    bg_top = (255, 255, 255)
+    bg_bot = (244, 250, 255)
+    for row in range(h):
+        t = row / max(h - 1, 1)
+        c = _blend(bg_top, bg_bot, t)
+        cdraw.line([(0, row), (w, row)], fill=c + (252,))
+        
+    mask = Image.new("L", (w, h), 0)
+    m_draw = ImageDraw.Draw(mask)
+    m_draw.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
+    
+    # Crisp specular white rim highlight
+    b_col = hex2rgb(border_color)
+    cdraw.rounded_rectangle([0, 0, w-1, h-1], radius=r, outline=b_col + (255,), width=2)
+    
+    img.paste(card_img, (x, y), mask)
 
 def draw_shadow_card(draw: ImageDraw.ImageDraw, x, y, w, h, r=18,
                      bg=CARD, shadow_color=SHADOW, blur=8, offset_y=4):
@@ -504,44 +586,47 @@ def _rounded_rect(draw, x, y, w, h, r, fill):
     draw.ellipse([x, y+h-2*r, x+2*r, y+h], fill=fill)
     draw.ellipse([x+w-2*r, y+h-2*r, x+w, y+h], fill=fill)
 
-def draw_progress_arc(draw, cx, cy, radius, thickness, value, max_val,
-                      fg_color, bg_color="#EAECEF", start_angle=-90, is_gradient=False, end_color=None):
-    """Draw a circular arc progress ring. If is_gradient, draw segmented gradient arc."""
-    frac  = max(0.0, min(value / max(max_val, 1e-6), 1.0))
-    box   = [cx-radius, cy-radius, cx+radius, cy+radius]
-    
-    # background ring
-    draw.arc(box, 0, 360, fill=hex2rgb(bg_color), width=thickness)
-    if frac > 0.005:
-        total_sweep = 360 * frac
-        if is_gradient and end_color:
-            c1 = hex2rgb(fg_color)
-            c2 = hex2rgb(end_color)
-            # draw in small segments to simulate gradient
-            segments = max(5, int(total_sweep / 2))
-            for i in range(segments):
-                sa = start_angle + (i / segments) * total_sweep
-                ea = start_angle + ((i+1) / segments) * total_sweep + 1  # +1 overlap
-                t = i / (segments - 1) if segments > 1 else 1.0
-                curr_c = _blend(c1, c2, t)
-                draw.arc(box, sa, ea, fill=curr_c, width=thickness)
-        else:
-            end_angle = start_angle + total_sweep
-            draw.arc(box, start_angle, end_angle, fill=hex2rgb(fg_color), width=thickness)
-
 def draw_pill(draw, x, y, w, h, fill):
     r = h // 2
-    _rounded_rect(draw, x, y, w, h, r, hex2rgb(fill))
+    _rounded_rect(draw, x, y, w, h, r, hex2rgb(fill) if isinstance(fill, str) else fill)
 
 def draw_pill_outline(draw, x, y, w, h, outline, width=2):
     r = h // 2
     draw.rounded_rectangle([x, y, x+w, y+h], radius=r,
-                            outline=hex2rgb(outline), width=width)
+                            outline=hex2rgb(outline) if isinstance(outline, str) else outline, width=width)
+
+_gradient_pill_cache = {}
+
+def draw_gradient_pill(img, x, y, w, h, c1_hex, c2_hex, outline_col=None):
+    if w <= 0 or h <= 0:
+        return
+    cache_key = (w, h, c1_hex, c2_hex, outline_col)
+    cached = _gradient_pill_cache.get(cache_key)
+    if cached is not None:
+        img.paste(cached[0], (x, y), cached[1])
+        return
+    r = h // 2
+    c1, c2 = hex2rgb(c1_hex), hex2rgb(c2_hex)
+    # Vectorized gradient via numpy — replaces slow per-pixel Python loop
+    t = np.linspace(0, 1, max(w, 1), dtype=np.float32)
+    arr = np.zeros((h, w, 4), dtype=np.uint8)
+    arr[:, :, 0] = (c1[0] * (1 - t) + c2[0] * t).astype(np.uint8)
+    arr[:, :, 1] = (c1[1] * (1 - t) + c2[1] * t).astype(np.uint8)
+    arr[:, :, 2] = (c1[2] * (1 - t) + c2[2] * t).astype(np.uint8)
+    arr[:, :, 3] = 255
+    grad = Image.fromarray(arr, "RGBA")
+    if outline_col:
+        gd = ImageDraw.Draw(grad)
+        gd.rounded_rectangle([0, 0, w-1, h-1], radius=r, outline=hex2rgb(outline_col) + (200,), width=1)
+    mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(mask)
+    md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
+    _gradient_pill_cache[cache_key] = (grad.copy(), mask.copy())
+    img.paste(grad, (x, y), mask)
 
 def gradient_pill(draw, x, y, w, h, c1, c2):
     """Horizontal gradient pill."""
     r = h // 2
-    # build gradient image and paste
     grad = Image.new("RGB", (w, h))
     gd   = ImageDraw.Draw(grad)
     for i in range(w):
@@ -553,13 +638,81 @@ def gradient_pill(draw, x, y, w, h, c1, c2):
     md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
     return grad, mask
 
+def _get_tk_font(size=14, bold=False):
+    weight = "bold" if bold else "normal"
+    return ("Segoe UI", max(8, int(size)), weight)
+
+def _round_rect_pts(x0, y0, x1, y1, r):
+    r = min(max(1, r), abs(x1 - x0) // 2, abs(y1 - y0) // 2)
+    return [
+        x0 + r, y0,
+        x1 - r, y0,
+        x1, y0,
+        x1, y0 + r,
+        x1, y1 - r,
+        x1, y1,
+        x1 - r, y1,
+        x0 + r, y1,
+        x0, y1,
+        x0, y1 - r,
+        x0, y0 + r,
+        x0, y0
+    ]
+
+def create_ambient_background(W, H):
+    """Generates a rich, luminous modern sky-blue neumorphic ambient background."""
+    bg_top = (210, 232, 254)   # #D2E8FE - luminous fresh sky blue
+    bg_mid = (228, 243, 254)   # #E4F3FE - soft radiant center
+    bg_bot = (192, 222, 253)   # #C0DEFD - rich pastel blue
+
+    bg = Image.new("RGBA", (W, H))
+    draw = ImageDraw.Draw(bg)
+    for y in range(H):
+        t = y / max(H - 1, 1)
+        if t < 0.35:
+            c = _blend(bg_top, bg_mid, t / 0.35)
+        else:
+            c = _blend(bg_mid, bg_bot, (t - 0.35) / 0.65)
+        draw.line([(0, y), (W, y)], fill=c + (255,))
+
+    # Luminous ambient lighting blooms
+    glows = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glows)
+    # Top-right bright radiant bloom
+    gdraw.ellipse([W - 680, -260, W + 360, 580], fill=(255, 255, 255, 140))
+    # Top-left ambient soft cyan
+    gdraw.ellipse([-220, -220, 680, 520], fill=(165, 220, 255, 110))
+    # Center-left subtle sky blue
+    gdraw.ellipse([-150, 400, 450, 900], fill=(180, 225, 255, 80))
+    # Bottom-left rich blue wave
+    gdraw.ellipse([-320, H - 560, 520, H + 320], fill=(145, 202, 253, 95))
+    # Bottom-right cerulean
+    gdraw.ellipse([W - 720, H - 460, W + 260, H + 260], fill=(155, 212, 254, 95))
+    glows = glows.filter(ImageFilter.GaussianBlur(85))
+    bg.alpha_composite(glows)
+
+    # Soft 3D Neumorphic ambient wave curves (smooth layered depth)
+    curves = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(curves)
+    # Smooth curved raised surface top-right
+    cdraw.ellipse([W - 760, -190, W + 320, 560], fill=(238, 248, 255, 90))
+    # Smooth curved raised surface bottom-left
+    cdraw.ellipse([-260, H - 410, 490, H + 230], fill=(232, 245, 255, 80))
+    curves = curves.filter(ImageFilter.GaussianBlur(36))
+    bg.alpha_composite(curves)
+
+    return bg.convert("RGB")
+
+
 # ─────────────────────────────────────────────
 #  App State
 # ─────────────────────────────────────────────
 LETTER_BUFFER_SIZE   = 12
 STABILIZATION_DELAY  = 2.5
 GLOBAL_COOLDOWN      = 1.8
-WORD_DEBOUNCE_TIME   = 2.0
+WORD_COOLDOWN        = 0.8     # Snappy real-time inter-word cooldown
+WORD_DEBOUNCE_TIME   = 1.0     # Lowered for faster consecutive signing
+TRANSLATE_ABSENCE_DELAY = 3.0  # Seconds with no hands on screen before auto-translating sentence
 WORD_SEQ_LEN         = 40
 MOTION_CONF_THRESH   = 0.45
 FACE_CONF_THRESH     = 0.35
@@ -592,6 +745,9 @@ gate_status       = "WAITING"
 
 current_mode      = 1      # 1=Letters, 2=Words
 typed_output      = ""
+translated_output = ""
+sentence_translated = False
+hands_absent_start_time = None
 missing_frames    = 0
 camera_index      = 0
 current_frame_prediction = ""
@@ -825,9 +981,106 @@ def validate_and_filter_target(results):
                 results.right_hand_landmarks = None
 
 # ─────────────────────────────────────────────
-#  Camera
+#  High-Speed Threaded Camera Capture (30-60 FPS)
 # ─────────────────────────────────────────────
-cap = cv2.VideoCapture(camera_index)
+class CameraCapture:
+    """Threaded camera grabber that continuously fetches frames at 30-60 FPS without blocking ML/GUI loops."""
+    def __init__(self, camera_index=0):
+        self.camera_index = camera_index
+        self.cap = None
+        self.running = False
+        self.lock = threading.Lock()
+        self.latest_frame = None
+        self.fps_tracker = collections.deque(maxlen=30)
+        self.cam_fps = 0.0
+        self.thread = None
+        self.start()
+
+    def _init_camera(self):
+        with self.lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+
+            backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+            cap = cv2.VideoCapture(self.camera_index, backend)
+            if not cap.isOpened() and backend != cv2.CAP_ANY:
+                cap = cv2.VideoCapture(self.camera_index)
+
+            if cap.isOpened():
+                # Set MJPG & 640x480 at high framerate with 1-frame buffer for low latency
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FPS, 60)
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+            self.cap = cap
+
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self.thread.start()
+
+    def _capture_loop(self):
+        self._init_camera()
+        while self.running:
+            with self.lock:
+                cap_ref = self.cap
+            if cap_ref is None or not cap_ref.isOpened():
+                time.sleep(0.04)
+                continue
+            ret, frame = cap_ref.read()
+            if not ret or frame is None:
+                time.sleep(0.01)
+                continue
+
+            now = time.time()
+            self.fps_tracker.append(now)
+            if len(self.fps_tracker) > 1:
+                self.cam_fps = (len(self.fps_tracker) - 1) / max(self.fps_tracker[-1] - self.fps_tracker[0], 1e-4)
+
+            with self.lock:
+                self.latest_frame = frame
+
+    def read(self):
+        with self.lock:
+            if self.latest_frame is not None:
+                return True, self.latest_frame.copy()
+            return False, None
+
+    def switch_camera(self, new_index):
+        with self.lock:
+            self.camera_index = new_index
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+        threading.Thread(target=self._init_camera, daemon=True).start()
+
+    def release(self):
+        self.running = False
+        with self.lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+
+    def stop(self):
+        self.release()
+
+cam_capture = CameraCapture(camera_index)
+cap = cam_capture  # Seamless drop-in replacement
 
 # ─────────────────────────────────────────────
 #  BMO face images
@@ -857,47 +1110,138 @@ _load_bmo_images()
 # ─────────────────────────────────────────────
 class ShieldFSLApp:
 
-    # ── Layout constants (1920×1080 canvas) ─────────────
-    W  = 1920
-    H  = 1080
+    # ── Layout design constants (1920×1080 baseline matching reference) ─────────────
+    DESIGN_W   = 1920
+    DESIGN_H   = 1080
+    W          = 1920
+    H          = 1080
 
-    PAD       = 24          # outer padding
-    TOP_H     = 68          # top nav bar height
-    BOT_H     = 110         # bottom output bar height
-    STATS_H   = 56          # stats row height
-    GAP       = 14          # gap between sections
-
-    # Derived
-    CONTENT_Y  = TOP_H + PAD
-    CONTENT_H  = H - TOP_H - PAD - STATS_H - GAP - BOT_H - PAD - GAP
-    RIGHT_X    = W * 60 // 100
-    RIGHT_W    = W - RIGHT_X - PAD
-    LEFT_W     = RIGHT_X - PAD * 2
+    PAD        = 28          # outer padding
+    TOP_Y      = 16
+    TOP_H      = 92          # floating top bar height
+    
+    CONTENT_Y  = 124
+    CONTENT_H  = 592
+    LEFT_W     = 1084        # camera card width
+    RIGHT_X    = 1132        # companion panel X
+    RIGHT_W    = 760         # companion panel width
+    
+    METRICS_Y  = 732
+    METRICS_H  = 122
+    
+    BOT_Y      = 870
+    BOT_H      = 156
 
     # ────────────────────────────────────────────────────
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Project B.M.O")
         self.root.configure(bg=BG_TOP)
-        self.root.geometry(f"{self.W}x{self.H}")
+
+        # ── Responsive Resolution Auto-Fit ──
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        usable_w = screen_w - 40
+        usable_h = screen_h - 80
+
+        if self.DESIGN_W > usable_w or self.DESIGN_H > usable_h:
+            init_scale = min(usable_w / self.DESIGN_W, usable_h / self.DESIGN_H)
+            init_w = max(800, int(self.DESIGN_W * init_scale))
+            init_h = max(450, int(self.DESIGN_H * init_scale))
+        else:
+            init_w = self.DESIGN_W
+            init_h = self.DESIGN_H
+
+        pos_x = max(0, (screen_w - init_w) // 2)
+        pos_y = max(0, (screen_h - init_h) // 2)
+        self.root.geometry(f"{init_w}x{init_h}+{pos_x}+{pos_y}")
+        self.root.minsize(800, 450)
         self.root.resizable(True, True)
         self.fullscreen = False
 
-        # ── Canvas (single surface) ──
-        self.canvas = tk.Canvas(root, width=self.W, height=self.H,
+        self.win_w = init_w
+        self.win_h = init_h
+        self.ui_scale = min(self.win_w / self.DESIGN_W, self.win_h / self.DESIGN_H)
+        self.render_w = max(1, int(self.DESIGN_W * self.ui_scale))
+        self.render_h = max(1, int(self.DESIGN_H * self.ui_scale))
+        self.ui_ox = (self.win_w - self.render_w) // 2
+        self.ui_oy = (self.win_h - self.render_h) // 2
+
+        # ── Canvas (High-Speed Layered Surface @ 60+ FPS) ──
+        self.canvas = tk.Canvas(root, width=init_w, height=init_h,
                                 bg=BG_TOP, highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
 
-        # ── PIL offscreen image ──
-        self.pil_img   = Image.new("RGB", (self.W, self.H), hex2rgb(BG_TOP))
-        self.tk_img    = None   # kept to prevent GC
+        # 1. Background image (full static UI shell)
+        self.bg_tk = None
+        self.bg_image_id = self.canvas.create_image(self.ui_ox, self.ui_oy, anchor=tk.NW)
+
+        # 2. Camera viewport image
+        self.cam_tk = None
+        self.cam_image_id = self.canvas.create_image(0, 0, anchor=tk.NW)
+
+        # 3. Right panel dynamic content image
+        self.right_tk = None
+        self.right_image_id = self.canvas.create_image(0, 0, anchor=tk.NW)
+
+        # 4. Top bar dynamic items: Mode slider knob & labels + FPS chip
+        self.slider_knob_id = self.canvas.create_polygon(0, 0, 0, 0, 0, 0, fill="#2563EB", outline="#60A5FA", width=1)
+        self.lbl_letters_id = self.canvas.create_text(0, 0, text="Letters", font=("Segoe UI", 12, "bold"), fill=WHITE, anchor="center")
+        self.lbl_words_id   = self.canvas.create_text(0, 0, text="Words", font=("Segoe UI", 12), fill="#5A718F", anchor="center")
+        self.fps_txt_id     = self.canvas.create_text(0, 0, text="60 FPS", font=("Segoe UI", 13, "bold"), fill=TEXT_MAIN, anchor="w")
+
+        # 5. Stats row items (4 metric values + RMS progress bar)
+        self.stat_text_ids = [
+            self.canvas.create_text(0, 0, text="0 Nodes", font=("Segoe UI", 20, "bold"), fill=TEXT_MAIN, anchor="w"),
+            self.canvas.create_text(0, 0, text="0 Lux", font=("Segoe UI", 20, "bold"), fill=TEXT_MAIN, anchor="w"),
+            self.canvas.create_text(0, 0, text="0 cm", font=("Segoe UI", 20, "bold"), fill=TEXT_MAIN, anchor="w"),
+            self.canvas.create_text(0, 0, text="0.00 RMS", font=("Segoe UI", 20, "bold"), fill=TEXT_MAIN, anchor="w"),
+        ]
+        self.rms_bar_bg_id = self.canvas.create_rectangle(0, 0, 0, 0, fill="#DCEBF9", outline="")
+        self.rms_bar_id    = self.canvas.create_rectangle(0, 0, 0, 0, fill="#3B82F6", outline="")
+
+        # 6. Bottom bar dynamic items: typed sentence + cursor
+        self.typed_text_id  = self.canvas.create_text(0, 0, text="", font=("Segoe UI", 22, "bold"), fill=TEXT_MAIN, anchor="w")
+        self.cursor_line_id = self.canvas.create_line(0, 0, 0, 0, fill=BLUE_PRIMARY, width=3)
+
+        # 7. Toast notification items
+        self.toast_bg_id   = self.canvas.create_polygon(0, 0, 0, 0, fill=BLUE_PRIMARY, outline="", state="hidden")
+        self.toast_text_id = self.canvas.create_text(0, 0, text="", font=("Segoe UI", 15, "bold"), fill=WHITE, anchor="center", state="hidden")
 
         # Hit-test rects for the 3 functional camera control buttons, keyed by name
         self._cam_btn_rects = {}
 
-        # Speak button interaction state
-        self._spk_hover       = False   # True while cursor is over the button
-        self._spk_click_until = 0.0     # time.time() deadline for click-flash
+        # UI Shell Cache: Pre-render static elements
+        self.ui_shell_cache = self._pre_render_ui_shell()
+        self._update_layout_geometry()
+
+        # Render caches for 60 FPS performance
+        self._cached_cam_mask = None
+        self._cached_cam_mask_key = None
+        self._cached_spk_glow = None
+        self._cached_send_glow = None
+        self._cached_cam_dock = None
+        # Camera HUD overlay cache (static badges, buttons — only redrawn on state change)
+        self._cached_hud_overlay = None
+        self._cached_hud_key = None
+
+        # Right panel dirty-flag cache: avoid re-rendering unless content changed
+        self._right_panel_dirty = True
+        self._right_last_update = 0.0
+        self._right_cache_key   = None   # (tts_is_speaking, received_msg_id, active_pred)
+        self._RIGHT_PANEL_MIN_INTERVAL = 0.08  # update right panel at max 12 FPS
+
+        # Speak and Send button interaction states
+        self._spk_hover        = False   # True while cursor is over the button
+        self._spk_click_until  = 0.0     # time.time() deadline for click-flash
+        self._send_hover       = False   # True while cursor is over send button
+        self._send_click_until = 0.0     # time.time() deadline for click-flash
+
+        # Co-Op 2-Way Partner state
+        self.partner_window   = None
+        self.received_message = None     # {"tokens": [...], "text": "...", "icon_paths": [...], "previews": [...], "time": ...}
+        coop_hub.register_fsl_listener(self._on_message_from_partner)
 
         # Cached camera ImageTk (updated by thread)
         self._cam_photo  = None
@@ -935,8 +1279,57 @@ class ShieldFSLApp:
         self._ml_thread = threading.Thread(target=self._ml_loop, daemon=True)
         self._ml_thread.start()
 
-        # Start GUI refresh loop
-        self._gui_loop()
+        # Start GUI refresh loop (deferred so mainloop() starts first)
+        self.root.after(50, self._gui_loop)
+
+    # ── Co-Op 2-Way Message Handlers ───────────────────────
+    def _on_message_from_partner(self, tokens, text, icon_paths):
+        """Called by CoOp bus when partner sends a message from Non-FSL window."""
+        self.root.after(0, lambda: self._handle_partner_message(tokens, text, icon_paths))
+
+    def _handle_partner_message(self, tokens, text, icon_paths):
+        """Processes incoming message, caches sign previews, and triggers alerts."""
+        previews = []
+        for token, p in icon_paths:
+            if p and os.path.exists(p):
+                try:
+                    im = Image.open(p).convert("RGBA")
+                    previews.append((token, im))
+                except Exception as e:
+                    print(f"[!] Error loading preview icon for {token}: {e}")
+
+        self.received_message = {
+            "tokens": list(tokens),
+            "text": text,
+            "icon_paths": list(icon_paths),
+            "previews": previews,
+            "time": time.time(),
+        }
+        play_ping_sound()
+        set_notification(f"PARTNER: {text[:28]}")
+
+    def _send_fsl_output(self):
+        """Delivers current FSL sentence to Non-FSL partner window, speaks it, and clears."""
+        global typed_output, translated_output, sentence_translated, hands_absent_start_time
+        if not sentence_translated and typed_output.strip():
+            translated_output = translate_sentence(typed_output)
+            sentence_translated = True
+        final_text = (translated_output or typed_output).strip()
+        if final_text:
+            coop_hub.send_from_fsl(final_text)
+            speak_text(final_text)
+            set_notification("SENT TO PARTNER")
+            typed_output = ""
+            translated_output = ""
+            sentence_translated = False
+            hands_absent_start_time = None
+
+    def get_cam_frame(self):
+        """Thread-safe copy of the latest live PIL camera frame."""
+        with self._cam_lock:
+            if self._cam_pil is not None:
+                return self._cam_pil.copy()
+        return None
 
     # ── Logo loader ──────────────────────────────────────
     def _load_logo(self):
@@ -951,7 +1344,7 @@ class ShieldFSLApp:
             target_h = 50
             aspect = logo.size[0] / max(logo.size[1], 1)
             target_w = int(target_h * aspect)
-            logo_resized = logo.resize((target_w, target_h), Image.LANCZOS)
+            logo_resized = logo.resize((target_w, target_h), Image.BILINEAR)
             alpha = logo_resized.split()[3]
 
             # Soft rim contour so the white figure pops cleanly against light backgrounds
@@ -979,6 +1372,71 @@ class ShieldFSLApp:
         except Exception as e:
             print(f"[!] Logo load error: {e}")
 
+
+    # ── Canvas Resize & Resolution Adaption ──────────────
+    def _on_canvas_resize(self, event):
+        if event.width <= 100 or event.height <= 100:
+            return
+        if event.width == self.win_w and event.height == self.win_h:
+            return
+        self.win_w = event.width
+        self.win_h = event.height
+        self.ui_scale = min(self.win_w / self.DESIGN_W, self.win_h / self.DESIGN_H)
+        self.render_w = max(1, int(self.DESIGN_W * self.ui_scale))
+        self.render_h = max(1, int(self.DESIGN_H * self.ui_scale))
+        self.ui_ox = (self.win_w - self.render_w) // 2
+        self.ui_oy = (self.win_h - self.render_h) // 2
+        self._update_layout_geometry()
+
+    def _update_layout_geometry(self):
+        """Update background scaling and positions of all canvas items when window resizes."""
+        if not hasattr(self, 'canvas') or not hasattr(self, 'bg_image_id'):
+            return
+        s = self.ui_scale
+        ox, oy = self.ui_ox, self.ui_oy
+        W, H = self.W, self.H
+
+        if self.ui_shell_cache is None:
+            self.ui_shell_cache = self._pre_render_ui_shell()
+
+        # High-quality scale background shell ONCE on resize
+        scaled_shell = self.ui_shell_cache.resize((self.render_w, self.render_h), Image.Resampling.BILINEAR)
+        self.bg_tk = ImageTk.PhotoImage(scaled_shell)
+        self.canvas.itemconfig(self.bg_image_id, image=self.bg_tk)
+        self.canvas.coords(self.bg_image_id, ox, oy)
+
+        # Top Bar Items
+        cy = self.TOP_Y + self.TOP_H // 2
+        fps_w, fps_h = 120, 42
+        fps_x = self.PAD + (W - self.PAD * 2) - fps_w - 28
+        self.canvas.coords(self.fps_txt_id, ox + int((fps_x + 32) * s), oy + int(cy * s))
+        self.canvas.itemconfig(self.fps_txt_id, font=_get_tk_font(int(13 * s), bold=True))
+
+        switch_w, switch_h = 210, 48
+        switch_x = W // 2 - switch_w // 2
+        self.canvas.coords(self.lbl_letters_id, ox + int((switch_x + switch_w // 4) * s), oy + int(cy * s))
+        self.canvas.coords(self.lbl_words_id, ox + int((switch_x + 3 * switch_w // 4) * s), oy + int(cy * s))
+        self.canvas.itemconfig(self.lbl_letters_id, font=_get_tk_font(int(12 * s), bold=True))
+        self.canvas.itemconfig(self.lbl_words_id, font=_get_tk_font(int(12 * s), bold=True))
+
+        # Stats Row Items
+        mx, my, mw, mh = self.PAD, self.METRICS_Y, W - self.PAD * 2, self.METRICS_H
+        slot_w = mw // 4
+        cy_met = my + mh // 2
+        for i in range(4):
+            sx = mx + i * slot_w + 32 + 58 + 18
+            self.canvas.coords(self.stat_text_ids[i], ox + int(sx * s), oy + int((cy_met + 14) * s))
+            self.canvas.itemconfig(self.stat_text_ids[i], font=_get_tk_font(int(20 * s), bold=True))
+
+        # Bottom Bar Items
+        bx_bot, by_bot, bw_bot, bh_bot = self.PAD, self.BOT_Y, W - self.PAD * 2, self.BOT_H
+        row_y = by_bot + 62
+        row_h = 60
+        inp_x = bx_bot + 36 + 28
+        inp_cy = row_y + row_h // 2
+        self.canvas.coords(self.typed_text_id, ox + int(inp_x * s), oy + int(inp_cy * s))
+        self.canvas.itemconfig(self.typed_text_id, font=_get_tk_font(int(22 * s), bold=True))
+
     # ── Fullscreen ────────────────────────────────────────
     def _toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
@@ -997,6 +1455,7 @@ class ShieldFSLApp:
         global debug_motion_word, debug_face_word, debug_motion_conf
         global debug_face_conf, gate_status, last_stable_char
         global camera_hidden
+        global translated_output, sentence_translated, hands_absent_start_time
 
         k = event.keysym.lower()
         if k == 'q':
@@ -1007,6 +1466,9 @@ class ShieldFSLApp:
         elif k == '1':
             current_mode = 1
             typed_output = ""
+            translated_output = ""
+            sentence_translated = False
+            hands_absent_start_time = None
             motion_state = ""
             pinky_history.clear(); index_history.clear()
             prediction_buffer.clear()
@@ -1016,6 +1478,9 @@ class ShieldFSLApp:
         elif k == '2':
             current_mode = 2
             typed_output = ""
+            translated_output = ""
+            sentence_translated = False
+            hands_absent_start_time = None
             hand_sequence_buffer.clear()
             debug_motion_word = "--"; debug_face_word = "--"
             debug_motion_conf = 0.0;  debug_face_conf  = 0.0
@@ -1027,30 +1492,45 @@ class ShieldFSLApp:
         elif k == 'k':
             trigger_calibration()
         elif k == 'n':
-            cap.release()
             camera_index = (camera_index + 1) % 3
-            cap = cv2.VideoCapture(camera_index)
+            cam_capture.switch_camera(camera_index)
             set_notification(f"CAMERA → {camera_index}")
         elif k == 'return':
-            speak_text(typed_output)
+            self._send_fsl_output()
+        elif k == 't':
+            if typed_output.strip():
+                translated_output = translate_sentence(typed_output)
+                sentence_translated = True
+                set_notification(f"TRANSLATED: {translated_output}")
+                speak_text(translated_output)
         elif k == 'space':
             typed_output += " "
+            sentence_translated = False
         elif k in ('backspace', 'delete'):
             typed_output = typed_output[:-1]
+            sentence_translated = False
+            translated_output = ""
         elif k == 'c':
             typed_output = ""
+            translated_output = ""
+            sentence_translated = False
+            hands_absent_start_time = None
             set_notification("OUTPUT CLEARED")
 
     # ── Mouse motion handler (hover tracking) ───────────
     def _on_motion(self, event):
-        mx, my = event.x, event.y
-        spk_w  = 200
-        spk_h  = 50
-        spk_x  = self.W - self.PAD - 24 - spk_w
-        y_bot  = self.H - self.BOT_H - self.PAD
-        spk_y  = y_bot + 24
-        self._spk_hover = (spk_x <= mx <= spk_x + spk_w and
-                           spk_y <= my <= spk_y + spk_h)
+        if not hasattr(self, 'ui_scale') or self.ui_scale <= 0:
+            return
+        mx = int((event.x - self.ui_ox) / self.ui_scale)
+        my = int((event.y - self.ui_oy) / self.ui_scale)
+        row_y = self.BOT_Y + 62
+        row_h = 60
+        btn_w = 175
+        gap = 14
+        send_x = self.PAD + (self.W - self.PAD * 2) - btn_w - 36
+        spk_x = send_x - btn_w - gap
+        self._spk_hover = (spk_x <= mx <= spk_x + btn_w and row_y <= my <= row_y + row_h)
+        self._send_hover = (send_x <= mx <= send_x + btn_w and row_y <= my <= row_y + row_h)
 
     # ── Mouse click handler ──────────────────────────────
     def _on_click(self, event):
@@ -1058,25 +1538,36 @@ class ShieldFSLApp:
         global pinky_history, index_history, prediction_buffer
         global hand_sequence_buffer, debug_motion_word, debug_face_word
         global debug_motion_conf, debug_face_conf, gate_status, last_stable_char
+        global translated_output, sentence_translated, hands_absent_start_time
 
-        mx, my = event.x, event.y
+        if not hasattr(self, 'ui_scale') or self.ui_scale <= 0:
+            return
+        mx = int((event.x - self.ui_ox) / self.ui_scale)
+        my = int((event.y - self.ui_oy) / self.ui_scale)
 
-        # Mode tabs click
-        tab_w, tab_h = 240, 42
-        tab_x = self.W // 2 - tab_w // 2
-        tab_y = (self.TOP_H - tab_h) // 2
-        if tab_y <= my <= tab_y + tab_h:
-            if tab_x <= mx < tab_x + tab_w // 2 and current_mode != 1:
+        # Mode slider capsule click
+        switch_w, switch_h = 210, 48
+        switch_x = self.W // 2 - switch_w // 2
+        cy_top = self.TOP_Y + self.TOP_H // 2
+        switch_y = cy_top - switch_h // 2
+        if switch_y <= my <= switch_y + switch_h and switch_x <= mx <= switch_x + switch_w:
+            if mx < switch_x + switch_w // 2 and current_mode != 1:
                 current_mode = 1
                 typed_output = ""
+                translated_output = ""
+                sentence_translated = False
+                hands_absent_start_time = None
                 pinky_history.clear(); index_history.clear()
                 prediction_buffer.clear()
                 hand_sequence_buffer.clear()
                 last_stable_char = ""
                 set_notification("LETTERS MODE")
-            elif tab_x + tab_w // 2 <= mx <= tab_x + tab_w and current_mode != 2:
+            elif mx >= switch_x + switch_w // 2 and current_mode != 2:
                 current_mode = 2
                 typed_output = ""
+                translated_output = ""
+                sentence_translated = False
+                hands_absent_start_time = None
                 hand_sequence_buffer.clear()
                 debug_motion_word = "--"; debug_face_word = "--"
                 debug_motion_conf = 0.0;  debug_face_conf  = 0.0
@@ -1091,23 +1582,34 @@ class ShieldFSLApp:
                 if key == "eye":
                     camera_hidden = not camera_hidden
                     set_notification("CAMERA HIDDEN" if camera_hidden else "CAMERA VISIBLE")
-                elif key == "lock":
+                elif key == "shield" or key == "lock":
                     trigger_calibration()
                 elif key == "cam":
-                    cap.release()
                     camera_index = (camera_index + 1) % 3
-                    cap = cv2.VideoCapture(camera_index)
+                    cam_capture.switch_camera(camera_index)
                     set_notification(f"CAMERA → {camera_index}")
                 break
 
+        # Action Buttons in bottom bar: SPEAK and SEND
+        row_y = self.BOT_Y + 62
+        row_h = 60
+        btn_w = 175
+        gap = 14
+        send_x = self.PAD + (self.W - self.PAD * 2) - btn_w - 36
+        spk_x = send_x - btn_w - gap
+
         # Speak button click
-        spk_w = 200
-        spk_x = self.W - self.PAD - 24 - spk_w
-        y_bot = self.H - self.BOT_H - self.PAD
-        spk_y = y_bot + 24
-        if spk_x - 5 <= mx <= spk_x + spk_w + 5 and spk_y - 5 <= my <= spk_y + 50 + 5:
+        if spk_x - 5 <= mx <= spk_x + btn_w + 5 and row_y - 5 <= my <= row_y + row_h + 5:
             self._spk_click_until = time.time() + 0.18   # 180 ms click-flash
-            speak_text(typed_output)
+            if not sentence_translated and typed_output.strip():
+                translated_output = translate_sentence(typed_output)
+                sentence_translated = True
+            speak_text(translated_output or typed_output)
+
+        # SEND button click
+        elif send_x - 5 <= mx <= send_x + btn_w + 5 and row_y - 5 <= my <= row_y + row_h + 5:
+            self._send_click_until = time.time() + 0.18  # 180 ms click-flash
+            self._send_fsl_output()
 
     # ── ML / camera processing thread ────────────────────
     def _ml_loop(self):
@@ -1120,6 +1622,7 @@ class ShieldFSLApp:
         global debug_motion_word, debug_motion_conf, debug_face_word, debug_face_conf
         global gate_status, missing_frames, node_count, fps_value
         global lux_value, dist_cm
+        global translated_output, sentence_translated, hands_absent_start_time
 
         last_left_hand  = None
         last_right_hand = None
@@ -1129,21 +1632,26 @@ class ShieldFSLApp:
         _prev_t = time.time()
 
         with mp_holistic.Holistic(
-            min_detection_confidence=0.55,
-            min_tracking_confidence=0.55,
-            model_complexity=1,
+            min_detection_confidence=0.50,
+            min_tracking_confidence=0.50,
+            model_complexity=0,
         ) as holistic:
 
             while self._running:
-                ret, frame = cap.read()
-                if not ret:
-                    time.sleep(0.02)
+                ret, frame = cam_capture.read()
+                if not ret or frame is None:
+                    time.sleep(0.005)
                     continue
 
                 frame     = cv2.flip(frame, 1)
                 H_f, W_f  = frame.shape[:2]
-                rgb       = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results   = holistic.process(rgb)
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Process MediaPipe at downscaled resolution for high FPS on low-end machines
+                # 320x240 retains landmark accuracy while cutting processing overhead by 75%
+                mp_w, mp_h = 320, 240
+                rgb_small = cv2.resize(rgb, (mp_w, mp_h), interpolation=cv2.INTER_LINEAR)
+                results   = holistic.process(rgb_small)
 
                 # Target Lock-In & Calibration Filter
                 validate_and_filter_target(results)
@@ -1153,14 +1661,11 @@ class ShieldFSLApp:
                 fps_value = 1.0 / max(now - _prev_t, 1e-6)
                 _prev_t   = now
 
-                # ── Ambient Lux estimate from frame brightness ──
-                # Convert to grayscale, take mean pixel value (0–255),
-                # then map to a plausible lux range (0–2000) with a simple power curve.
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                mean_brightness = float(cv2.mean(gray)[0])          # 0–255
+                # ── Ambient Lux estimate from frame brightness (subsampled for speed) ──
+                mean_brightness = float(np.mean(rgb_small[::4, ::4]))
                 raw_lux = (mean_brightness / 255.0) ** 1.8 * 2000.0
-                # EMA smooth so the number doesn't jump every frame
                 lux_value = lux_value * 0.85 + raw_lux * 0.15
+
 
                 # ── Focal Distance estimate from face landmark span ──
                 # Uses the eye-to-eye width in normalised coords; a real webcam at
@@ -1305,12 +1810,17 @@ class ShieldFSLApp:
                                         else:
                                             last_predicted_word = out_word
                                             last_word_time      = current_time
-                                            typed_output       += out_word + " "
-                                            global_cooldown_end = current_time + GLOBAL_COOLDOWN
+                                            if sentence_translated:
+                                                typed_output        = out_word + " "
+                                                translated_output   = ""
+                                                sentence_translated = False
+                                            else:
+                                                typed_output       += out_word + " "
+                                            global_cooldown_end = current_time + WORD_COOLDOWN
+                                            hands_absent_start_time = None
                                             hand_sequence_buffer.clear()
                                             wrist_sequence_buffer.clear()
                                             face_sequence_buffer.clear()
-                                            speak_text(out_word)
                                             set_notification("OK: " + out_word)
                                     else:
                                         for _ in range(8):
@@ -1408,17 +1918,20 @@ class ShieldFSLApp:
                                     stable_start_time = current_time
                             current_frame_prediction = last_stable_char
 
+                        if sentence_translated:
+                            typed_output        = ""
+                            translated_output   = ""
+                            sentence_translated = False
+
                         if motion_triggered and motion_char and not on_cooldown:
                             typed_output       += motion_char
                             global_cooldown_end = current_time + GLOBAL_COOLDOWN
                             stable_start_time   = current_time + GLOBAL_COOLDOWN
-                            speak_text(motion_char)
                             set_notification("OK: " + motion_char + " (motion)")
                         elif letter_triggered and letter_char and not on_cooldown:
                             typed_output       += letter_char
                             global_cooldown_end = current_time + GLOBAL_COOLDOWN
                             stable_start_time   = current_time + GLOBAL_COOLDOWN
-                            speak_text(letter_char)
                             set_notification("OK: " + letter_char)
                     else:
                         missing_frames += 1
@@ -1427,8 +1940,31 @@ class ShieldFSLApp:
                             prediction_buffer.clear()
                             last_stable_char = ""; motion_state = ""
 
+                # ── Auto-Sentence Translation when hands not on screen for 3 seconds ──
+                if current_mode == 2:
+                    hands_on_screen = (results.left_hand_landmarks is not None or
+                                       results.right_hand_landmarks is not None)
+                else:
+                    hands_on_screen = (primary_hand is not None)
+
+                if hands_on_screen:
+                    hands_absent_start_time = None
+                else:
+                    if typed_output.strip() and not sentence_translated:
+                        if hands_absent_start_time is None:
+                            hands_absent_start_time = current_time
+                        elif (current_time - hands_absent_start_time) >= TRANSLATE_ABSENCE_DELAY:
+                            translated_output = translate_sentence(typed_output)
+                            sentence_translated = True
+                            hands_absent_start_time = None
+                            set_notification(f"TRANSLATED: {translated_output}")
+                            speak_text(translated_output)
+                    else:
+                        hands_absent_start_time = None
+
                 # ── Draw landmarks onto frame ──
-                draw_frame = frame.copy()
+                # ZERO-COPY DRAWING: Draw landmarks directly on the RGB buffer used for display
+                draw_frame = rgb
                 if results.face_landmarks:
                     mp_drawing.draw_landmarks(
                         draw_frame, results.face_landmarks,
@@ -1451,649 +1987,645 @@ class ShieldFSLApp:
                                                thickness=2, circle_radius=4),
                         mp_drawing.DrawingSpec(color=(60, 220, 60), thickness=2))
 
-                # Convert to PIL and cache
-                rgb_frame = cv2.cvtColor(draw_frame, cv2.COLOR_BGR2RGB)
-                pil_cam   = Image.fromarray(rgb_frame)
+                # Convert to PIL and cache (store as numpy for speed; GUI thread converts)
+                pil_cam = Image.fromarray(draw_frame)
                 with self._cam_lock:
                     self._cam_pil = pil_cam
 
-    # ── GUI render loop (runs on main thread) ─────────────
+    # ── GUI render loop (runs on main thread @ ~60 FPS) ─────────────
     def _gui_loop(self):
         if not self._running:
             return
+        t_start = time.time()
         try:
             self._render()
+            if self.partner_window and getattr(self.partner_window, '_running', False):
+                # Throttle partner window: update every ~100ms (10 FPS) to free up primary window
+                now = time.time()
+                last_p_render = getattr(self.partner_window, '_last_render_t', 0.0)
+                if now - last_p_render >= 0.10:
+                    self.partner_window._render()
+                    self.partner_window._last_render_t = now
         except Exception as e:
             print(f"[Render Error] {e}")
-        self.root.after(16, self._gui_loop)   # ~60 fps
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        delay = max(1, 16 - elapsed_ms)
+        self.root.after(delay, self._gui_loop)   # ~60 fps target
 
     # ── Master render ────────────────────────────────────
+    def _pre_render_ui_shell(self):
+        """Pre-renders all static GUI elements into a single cache image matching the Photoshop design."""
+        W, H = self.W, self.H
+        shell = create_ambient_background(W, H)
+        draw = ImageDraw.Draw(shell)
+
+        # ── 1. Top Bar Card ──
+        bx, by, bw, bh = self.PAD, self.TOP_Y, W - self.PAD * 2, self.TOP_H
+        draw_glass_card(shell, bx, by, bw, bh, r=26, shadow_blur=16, shadow_alpha=95)
+        cy = by + bh // 2
+
+        # Left: Ambient glow + Title
+        logo_x = bx + 28
+        glow = Image.new("RGBA", (72, 72), (0, 0, 0, 0))
+        gdraw = ImageDraw.Draw(glow)
+        gdraw.ellipse([0, 0, 72, 72], fill=hex2rgb("#93C5FD") + (120,))
+        gdraw.ellipse([12, 12, 60, 60], fill=hex2rgb("#38BDF8") + (180,))
+        glow = glow.filter(ImageFilter.GaussianBlur(12))
+        shell.paste(glow, (logo_x, cy - 36), glow)
+
+        title_x = logo_x + 80
+        f_title = _get_font(25, bold=True)
+        draw.text((title_x, cy - 12), "Project ", font=f_title, fill=hex2rgb(TEXT_MAIN), anchor="lm")
+        w_proj = draw.textlength("Project ", font=f_title)
+
+        bmo_x = int(title_x + w_proj)
+        draw.text((bmo_x, cy - 12), "B.M.O", font=f_title, fill=hex2rgb(BLUE_PRIMARY), anchor="lm")
+        w_bmo = draw.textlength("B.M.O", font=f_title)
+
+        # Online badge pill
+        badge_x = int(bmo_x + w_bmo + 16)
+        badge_y = cy - 23
+        badge_w, badge_h = 80, 24
+        draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+                               radius=badge_h // 2, fill=hex2rgb(GREEN_BG),
+                               outline=hex2rgb(GREEN_BORDER), width=1)
+        draw.ellipse([badge_x + 9, badge_y + 8, badge_x + 16, badge_y + 15], fill=hex2rgb(GREEN_ONLINE))
+        _draw_text(draw, badge_x + 22, badge_y + 12, "ONLINE", size=10, fill=GREEN_TEXT, bold=True, anchor="lm")
+
+        # Subtitle
+        _draw_text(draw, title_x, cy + 16, "Filipino Sign Language Neural Core v2.4", size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
+
+        # Center: Inset Mode Slider Track
+        switch_w, switch_h = 210, 48
+        switch_x = W // 2 - switch_w // 2
+        switch_y = cy - switch_h // 2
+        draw.rounded_rectangle([switch_x, switch_y, switch_x + switch_w, switch_y + switch_h],
+                               radius=switch_h // 2, fill=hex2rgb("#DDEBF9"),
+                               outline=hex2rgb("#CBDDF2"), width=1)
+        _draw_text(draw, switch_x + switch_w // 4, cy, "Letters", size=13, fill="#5A718F", bold=False, anchor="mm")
+        _draw_text(draw, switch_x + 3 * switch_w // 4, cy, "Words", size=13, fill="#5A718F", bold=False, anchor="mm")
+
+        # Right: FPS Counter Pill Badge Outline
+        fps_w, fps_h = 120, 42
+        fps_x = bx + bw - fps_w - 28
+        fps_y = cy - fps_h // 2
+        draw.rounded_rectangle([fps_x, fps_y, fps_x + fps_w, fps_y + fps_h],
+                               radius=fps_h // 2, fill=hex2rgb("#F8FBFE"),
+                               outline=hex2rgb("#DCE8F6"), width=1)
+        draw.ellipse([fps_x + 16, fps_y + 17, fps_x + 24, fps_y + 25], fill=hex2rgb(GREEN_ONLINE))
+
+        # ── 2. Left Panel Card (Camera Outer Glass Card) ──
+        cx, cy_cam, cw, ch_cam = self.PAD, self.CONTENT_Y, self.LEFT_W, self.CONTENT_H
+        draw_glass_card(shell, cx, cy_cam, cw, ch_cam, r=26, shadow_blur=18, shadow_alpha=110)
+
+        # ── 3. Right Panel: BMO Header Card ──
+        rx, ry_bmo, rw = self.RIGHT_X, self.CONTENT_Y, self.RIGHT_W
+        bmo_h = 114
+        draw_glass_card(shell, rx, ry_bmo, rw, bmo_h, r=26, shadow_blur=16, shadow_alpha=95)
+
+        # ── 4. Right Panel: Inference Panel Card ──
+        det_y = ry_bmo + bmo_h + 18
+        det_h = ch_cam - bmo_h - 18
+        draw_glass_card(shell, rx, det_y, rw, det_h, r=26, shadow_blur=16, shadow_alpha=95)
+
+        # Top-Left: • INFERENCE ACTIVE
+        draw.ellipse([rx + 28, det_y + 28, rx + 36, det_y + 36], fill=hex2rgb(BLUE_PRIMARY))
+        _draw_text(draw, rx + 44, det_y + 32, "INFERENCE ACTIVE", size=13, fill=BLUE_PRIMARY, bold=True, anchor="lm")
+
+        # Center: Neumorphic Squircle Background
+        sq_size = 90
+        sq_x = rx + (rw - sq_size) // 2
+        sq_y = det_y + (det_h - sq_size) // 2 - 20
+        draw.rounded_rectangle([sq_x, sq_y, sq_x + sq_size, sq_y + sq_size],
+                               radius=24, fill=hex2rgb("#E0EEFA"),
+                               outline=hex2rgb("#FFFFFF"), width=2)
+
+        # ── 5. Metrics Row Card ──
+        mx, my, mw, mh = self.PAD, self.METRICS_Y, W - self.PAD * 2, self.METRICS_H
+        draw_glass_card(shell, mx, my, mw, mh, r=24, shadow_blur=16, shadow_alpha=95)
+
+        slot_w = mw // 4
+        cy_met = my + mh // 2
+
+        items = [
+            ("NEURAL LANDMARKS", "nodes"),
+            ("AMBIENT LUX", "lux"),
+            ("FOCAL DISTANCE", "dist"),
+            ("KINEMATIC STABILITY", "ecg"),
+        ]
+
+        for i, (label, itype) in enumerate(items):
+            sx = mx + i * slot_w + 32
+            dome_d = 58
+            dome_x = sx
+            dome_y = cy_met - dome_d // 2
+
+            # Neumorphic Dome Background
+            draw.ellipse([dome_x, dome_y, dome_x + dome_d, dome_y + dome_d],
+                         fill=hex2rgb("#E3F0FC"), outline=hex2rgb("#FFFFFF"), width=2)
+
+            ic_cx, ic_cy = dome_x + dome_d // 2, dome_y + dome_d // 2
+            if itype == "nodes":
+                draw.rounded_rectangle([ic_cx - 10, ic_cy - 10, ic_cx + 10, ic_cy + 10], radius=4,
+                                       outline=hex2rgb(BLUE_PRIMARY), width=2)
+                draw.ellipse([ic_cx - 3, ic_cy - 3, ic_cx + 3, ic_cy + 3], fill=hex2rgb(BLUE_PRIMARY))
+            elif itype == "lux":
+                draw.ellipse([ic_cx - 6, ic_cy - 6, ic_cx + 6, ic_cy + 6], outline=hex2rgb(BLUE_PRIMARY), width=2)
+                for deg in range(0, 360, 45):
+                    rad = math.radians(deg)
+                    x1 = ic_cx + int(9 * math.cos(rad))
+                    y1 = ic_cy + int(9 * math.sin(rad))
+                    x2 = ic_cx + int(13 * math.cos(rad))
+                    y2 = ic_cy + int(13 * math.sin(rad))
+                    draw.line([(x1, y1), (x2, y2)], fill=hex2rgb(BLUE_PRIMARY), width=2)
+            elif itype == "dist":
+                draw.ellipse([ic_cx - 9, ic_cy - 9, ic_cx + 9, ic_cy + 9], outline=hex2rgb(BLUE_PRIMARY), width=2)
+                draw.ellipse([ic_cx - 3, ic_cy - 3, ic_cx + 3, ic_cy + 3], fill=hex2rgb(BLUE_PRIMARY))
+                draw.line([(ic_cx - 13, ic_cy), (ic_cx - 10, ic_cy)], fill=hex2rgb(BLUE_PRIMARY), width=2)
+                draw.line([(ic_cx + 10, ic_cy), (ic_cx + 13, ic_cy)], fill=hex2rgb(BLUE_PRIMARY), width=2)
+            elif itype == "ecg":
+                pts = [(ic_cx - 14, ic_cy), (ic_cx - 8, ic_cy), (ic_cx - 4, ic_cy - 8),
+                       (ic_cx + 1, ic_cy + 9), (ic_cx + 5, ic_cy - 4), (ic_cx + 9, ic_cy), (ic_cx + 14, ic_cy)]
+                draw.line(pts, fill=hex2rgb(BLUE_PRIMARY), width=2)
+
+            tx = dome_x + dome_d + 18
+            _draw_text(draw, tx, cy_met - 14, label, size=11, fill=TEXT_MUTED, bold=True, anchor="lm")
+
+            if i < 3:
+                div_x = mx + (i + 1) * slot_w
+                draw.line([(div_x, cy_met - 30), (div_x, cy_met + 30)], fill=hex2rgb("#DDEAF7"), width=1)
+
+        # ── 6. Bottom Bar Card ──
+        bx_bot, by_bot, bw_bot, bh_bot = self.PAD, self.BOT_Y, W - self.PAD * 2, self.BOT_H
+        draw_glass_card(shell, bx_bot, by_bot, bw_bot, bh_bot, r=26, shadow_blur=18, shadow_alpha=110)
+
+        # Header: Audio Equalizer Waveform + FSL OUTPUT
+        hdr_x = bx_bot + 36
+        hdr_y = by_bot + 28
+        w_amps = [4, 9, 14, 8]
+        for i, amp in enumerate(w_amps):
+            xi = hdr_x + i * 5
+            draw.line([(xi, hdr_y - amp), (xi, hdr_y + amp)], fill=hex2rgb(BLUE_PRIMARY), width=2)
+        _draw_text(draw, hdr_x + 28, hdr_y, "FSL OUTPUT", size=14, fill=BLUE_PRIMARY, bold=True, anchor="lm")
+
+        # Inset Pill Container Track (recessed neumorphic text field)
+        row_y = by_bot + 62
+        row_h = 60
+        btn_w = 175
+        gap = 14
+        send_x = bx_bot + bw_bot - btn_w - 36
+        spk_x = send_x - btn_w - gap
+        inp_x = bx_bot + 36
+        inp_w = spk_x - inp_x - 20
+        inp_h = row_h
+        draw.rounded_rectangle([inp_x, row_y, inp_x + inp_w, row_y + inp_h],
+                               radius=inp_h // 2, fill=hex2rgb("#F3F8FE"),
+                               outline=hex2rgb("#CFE2F7"), width=1)
+
+        # Pre-render default Speak and Send buttons onto static shell
+        draw_gradient_pill(shell, spk_x, row_y, btn_w, row_h, "#1D68FE", "#38BDF8")
+        draw.arc([spk_x + 1, row_y + 1, spk_x + btn_w - 2, row_y + row_h - 2], start=190, end=350, fill=hex2rgb(WHITE), width=1)
+        spk_ic_x = spk_x + 26
+        spk_ic_y = row_y + row_h // 2
+        draw.polygon([(spk_ic_x - 8, spk_ic_y - 4), (spk_ic_x - 3, spk_ic_y - 4),
+                      (spk_ic_x + 3, spk_ic_y - 9), (spk_ic_x + 3, spk_ic_y + 9),
+                      (spk_ic_x - 3, spk_ic_y + 4), (spk_ic_x - 8, spk_ic_y + 4)], fill=hex2rgb(WHITE))
+        draw.arc([spk_ic_x + 3, spk_ic_y - 7, spk_ic_x + 11, spk_ic_y + 7], start=-60, end=60, fill=hex2rgb(WHITE), width=2)
+        draw.arc([spk_ic_x + 6, spk_ic_y - 11, spk_ic_x + 16, spk_ic_y + 11], start=-60, end=60, fill=hex2rgb(WHITE), width=2)
+        _draw_text(draw, spk_x + 52, row_y + row_h // 2, "SPEAK", size=15, fill=WHITE, bold=True, anchor="lm")
+
+        draw_gradient_pill(shell, send_x, row_y, btn_w, row_h, "#0EA5E9", "#0369A1")
+        draw.arc([send_x + 1, row_y + 1, send_x + btn_w - 2, row_y + row_h - 2], start=190, end=350, fill=hex2rgb(WHITE), width=1)
+        arr_cx = send_x + 30
+        arr_cy = row_y + row_h // 2
+        draw.line([(arr_cx - 10, arr_cy), (arr_cx + 8, arr_cy)], fill=hex2rgb(WHITE), width=3)
+        draw.polygon([(arr_cx + 8, arr_cy), (arr_cx + 2, arr_cy - 6), (arr_cx + 2, arr_cy + 6)], fill=hex2rgb(WHITE))
+        _draw_text(draw, send_x + 52, row_y + row_h // 2, "SEND", size=15, fill=WHITE, bold=True, anchor="lm")
+
+        return shell
+
     def _render(self):
         now  = time.time()
         W, H = self.W, self.H
+        s    = self.ui_scale
+        ox, oy = self.ui_ox, self.ui_oy
 
-        img  = Image.new("RGB", (W, H), hex2rgb(BG_TOP))
-        draw = ImageDraw.Draw(img)
+        # 1. Update GUI rendering FPS tracker
+        self._frame_times.append(now)
+        if len(self._frame_times) > 1:
+            self.gui_fps = (len(self._frame_times) - 1) / max(self._frame_times[-1] - self._frame_times[0], 1e-4)
 
-        # Draw subtle background gradient (white to light blue-gray)
-        c1 = hex2rgb(BG_TOP)
-        c2 = hex2rgb(BG_BOT)
-        # To avoid slow loop, just draw some large rects or we can just do a simple vertical gradient
-        for y in range(0, H, max(1, H//50)):
-            t = y / max(H-1, 1)
-            c = _blend(c1, c2, t)
-            draw.rectangle([0, y, W, y + max(1, H//50)], fill=c)
+        display_fps = self.gui_fps if hasattr(self, 'gui_fps') and self.gui_fps > 0 else fps_value
+        self.canvas.itemconfig(self.fps_txt_id, text=f"{display_fps:.0f} FPS")
 
-        self._draw_topbar(img, draw, now)
-        self._draw_left_panel(img, draw, now)
-        self._draw_right_panel(img, draw, now)
-        self._draw_stats_row(img, draw, now)
-        self._draw_bottom_bar(img, draw, now)
-        self._draw_notification(img, draw, now)
+        # 2. Dynamic Slider Knob
+        cy_top = self.TOP_Y + self.TOP_H // 2
+        switch_w, switch_h = 210, 48
+        switch_x = W // 2 - switch_w // 2
+        switch_y = cy_top - switch_h // 2
+        knob_pad = 4
+        knob_w = switch_w // 2 - knob_pad
+        knob_h = switch_h - knob_pad * 2
+        knob_y = switch_y + knob_pad
+        knob_x = switch_x + knob_pad if current_mode == 1 else switch_x + switch_w // 2
 
-        # Push to canvas
-        self.tk_img = ImageTk.PhotoImage(img)
-        self.canvas.delete("all")
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
+        kx0 = ox + int(knob_x * s)
+        ky0 = oy + int(knob_y * s)
+        kx1 = kx0 + int(knob_w * s)
+        ky1 = ky0 + int(knob_h * s)
+        kr  = int(knob_h * s) // 2
+        self.canvas.coords(self.slider_knob_id, *_round_rect_pts(kx0, ky0, kx1, ky1, kr))
+        self.canvas.itemconfig(self.lbl_letters_id, fill=WHITE if current_mode == 1 else "#5A718F")
+        self.canvas.itemconfig(self.lbl_words_id, fill=WHITE if current_mode == 2 else "#5A718F")
 
-    def _draw_topbar(self, img, draw, now):
-        W  = self.W
-        h  = self.TOP_H
+        # 3. Update Camera Viewport Sub-image
+        self._draw_left_panel(now)
 
-        # Clean top bar background with soft drop shadow
-        draw_shadow_card(draw, 0, -10, W, h + 10, r=0, bg=CARD, shadow_color=SHADOW, offset_y=3)
+        # 4. Update Right Companion Panel Sub-image (throttled + dirty-flag for max FPS)
+        active_pred = current_frame_prediction if current_mode == 1 else debug_motion_word
+        right_key = (tts_is_speaking, id(self.received_message), active_pred, current_mode)
+        time_since_right = now - self._right_last_update
+        if right_key != self._right_cache_key or time_since_right >= self._RIGHT_PANEL_MIN_INTERVAL:
+            self._draw_right_panel(now)
+            self._right_cache_key = right_key
+            self._right_last_update = now
 
-        # Subtle bottom separator line
-        draw.line([(0, h - 1), (W, h - 1)], fill=hex2rgb("#E2E8F0"), width=1)
+        # 5. Update Stats Row Texts & Kinematic Stability Bar
+        mx, my, mw, mh = self.PAD, self.METRICS_Y, self.W - self.PAD * 2, self.METRICS_H
+        slot_w = mw // 4
+        cy_met = my + mh // 2
 
-        # ── Logo image with drop shadow (NO circle) ──
-        logo_x = self.PAD
-        logo_cy = h // 2
+        stab_val = min(debug_motion_conf / 100.0 if current_mode == 2
+                       else (min((time.time() - stable_start_time) / STABILIZATION_DELAY, 1.0)
+                             if current_frame_prediction else 0.0), 1.0)
+        rms_val = max(0.0, 0.1 - (stab_val * 0.1))
 
-        if self._logo_rgba is not None:
-            lw, lh = self._logo_w, self._logo_h
-            ly = logo_cy - lh // 2
-            # 1. Soft drop shadow
-            img.paste(self._logo_shadow, (logo_x - self._logo_pad, ly - self._logo_pad), self._logo_shadow)
-            # 2. Rim contour
-            img.paste(self._logo_rim, (logo_x, ly), self._logo_rim_mask)
-            # 3. Logo itself
-            img.paste(self._logo_rgba, (logo_x, ly), self._logo_alpha)
-            text_x = logo_x + lw + 16
+        self.canvas.itemconfig(self.stat_text_ids[0], text=f"{node_count} Nodes")
+        self.canvas.itemconfig(self.stat_text_ids[1], text=f"{int(lux_value)} Lux")
+        self.canvas.itemconfig(self.stat_text_ids[2], text=f"{int(dist_cm)} cm")
+        self.canvas.itemconfig(self.stat_text_ids[3], text=f"{rms_val:.2f} RMS")
+
+        bar_x = ox + int((mx + 3 * slot_w + 32 + 58 + 18 + 120) * s)
+        bar_w = int(120 * s)
+        bar_h = int(10 * s)
+        bar_y = oy + int((cy_met + 9) * s)
+        if bar_w > 20:
+            fill_w = int(bar_w * max(0.05, min(1.0, 1.0 - (rms_val / 0.15))))
+            self.canvas.coords(self.rms_bar_bg_id, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h)
+            self.canvas.coords(self.rms_bar_id, bar_x, bar_y, bar_x + fill_w, bar_y + bar_h)
+
+        # 6. Update Bottom Bar Typed Text & Cursor
+        bx_bot, by_bot, bw_bot, bh_bot = self.PAD, self.BOT_Y, self.W - self.PAD * 2, self.BOT_H
+        row_y = by_bot + 62
+        row_h = 60
+        inp_x = bx_bot + 36 + 28
+        inp_cy = row_y + row_h // 2
+        display_text = translated_output or typed_output
+
+        if not display_text:
+            self.canvas.itemconfig(self.typed_text_id, text="Sign to the camera... Press SEND to deliver to partner.", fill=TEXT_FAINT)
+            self.canvas.itemconfig(self.cursor_line_id, state="hidden")
         else:
-            # Fallback
-            draw.ellipse([logo_x, logo_cy-16, logo_x+32, logo_cy+16], fill=hex2rgb(ACC_BLUE))
-            text_x = logo_x + 48
+            self.canvas.itemconfig(self.typed_text_id, text=display_text, fill=TEXT_MAIN)
+            if int(now * 2) % 2 == 0:
+                f = _get_font(int(22 * s), bold=True)
+                tmp = Image.new("L", (1, 1))
+                td = ImageDraw.Draw(tmp)
+                text_len = td.textlength(display_text, font=f)
+                cur_x = ox + int(inp_x * s) + int(text_len) + 4
+                cur_y0 = oy + int((inp_cy - 16) * s)
+                cur_y1 = oy + int((inp_cy + 16) * s)
+                self.canvas.coords(self.cursor_line_id, cur_x, cur_y0, cur_x, cur_y1)
+                self.canvas.itemconfig(self.cursor_line_id, state="normal")
+            else:
+                self.canvas.itemconfig(self.cursor_line_id, state="hidden")
 
-        # ── "Project B.M.O" title with pixel-perfect kerning & gradient ──
-        f_title = _get_font(24, bold=True)
-        _draw_text(draw, text_x, logo_cy - 12, "Project", size=24, fill="#0F172A", bold=True, anchor="lm")
-        proj_w = draw.textlength("Project ", font=f_title)
+        # 7. Notification Toast
+        if now < notification_end:
+            txt = notification_text
+            nw  = max(200, len(txt) * 14 + 48)
+            nh  = 48
+            nx  = ox + int((self.W // 2 - nw // 2) * s)
+            ny  = oy + int((self.CONTENT_Y + self.CONTENT_H // 2 - nh // 2) * s)
+            nw_s = int(nw * s)
+            nh_s = int(nh * s)
+            nr   = nh_s // 2
+            self.canvas.coords(self.toast_bg_id, *_round_rect_pts(nx, ny, nx + nw_s, ny + nh_s, nr))
+            self.canvas.coords(self.toast_text_id, nx + nw_s // 2, ny + nh_s // 2)
+            self.canvas.itemconfig(self.toast_text_id, text=txt, font=_get_tk_font(int(15 * s), bold=True))
+            self.canvas.itemconfig(self.toast_bg_id, state="normal")
+            self.canvas.itemconfig(self.toast_text_id, state="normal")
+        else:
+            self.canvas.itemconfig(self.toast_bg_id, state="hidden")
+            self.canvas.itemconfig(self.toast_text_id, state="hidden")
 
-        bmo_x = int(text_x + proj_w)
-        bmo_w = int(draw.textlength("B.M.O", font=f_title))
-        _draw_gradient_text(img, bmo_x, logo_cy - 12, "B.M.O", size=24,
-                            c1_hex="#2563EB", c2_hex="#06B6D4", bold=True, anchor="lm")
-
-        # Sleek "● ONLINE" status pill
-        pill_x = bmo_x + bmo_w + 14
-        pill_y = logo_cy - 12 - 10
-        pill_w, pill_h = 68, 20
-        draw.rounded_rectangle([pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
-                               radius=10, fill=hex2rgb("#ECFDF5"), outline=hex2rgb("#A7F3D0"), width=1)
-        draw.ellipse([pill_x + 8, pill_y + 7, pill_x + 14, pill_y + 13], fill=hex2rgb("#10B981"))
-        _draw_text(draw, pill_x + 20, pill_y + 10, "ONLINE", size=9, fill="#059669", bold=True, anchor="lm")
-
-        # Subtitle
-        _draw_text(draw, text_x, logo_cy + 13, "FILIPINO SIGN LANGUAGE NEURAL CORE • V2.4", size=10, fill="#64748B", bold=True, anchor="lm")
-
-        # ── Centre pill tabs (Letters / Words) ──
-        tab_w, tab_h = 240, 42
-        tab_x = W // 2 - tab_w // 2
-        tab_y = (h - tab_h) // 2
-
-        # Background pill (inactive)
-        draw_pill(draw, tab_x, tab_y, tab_w, tab_h, fill="#F1F5F9")
-
-        slot_w = tab_w // 2
-        # Active tab pill (Gradient)
-        ax = tab_x if current_mode == 1 else tab_x + slot_w
-        grad, mask = gradient_pill(draw, 0, 0, slot_w, tab_h, ACC_BLUE, ACC_CYAN)
-        img.paste(grad, (ax, tab_y), mask)
-
-        # Tab text
-        _draw_text(draw, tab_x + slot_w//2, tab_y + tab_h//2, "Letters", size=15,
-                   fill=WHITE if current_mode == 1 else "#64748B", bold=(current_mode == 1), anchor="mm")
-        _draw_text(draw, tab_x + slot_w + slot_w//2, tab_y + tab_h//2, "Words", size=15,
-                   fill=WHITE if current_mode == 2 else "#64748B", bold=(current_mode == 2), anchor="mm")
-
-        # ── Right: Single Sleek FPS Chip (NO duplicate mode chip, NO "U" avatar) ──
-        fps_w, fps_h = 92, 32
-        fps_x = W - self.PAD - fps_w
-        fps_y = (h - fps_h) // 2
-
-        draw.rounded_rectangle([fps_x, fps_y, fps_x + fps_w, fps_y + fps_h],
-                               radius=fps_h//2, fill=hex2rgb("#F8FAFC"), outline=hex2rgb("#E2E8F0"), width=1)
-        draw.ellipse([fps_x + 12, fps_y + 13, fps_x + 18, fps_y + 19], fill=hex2rgb("#10B981"))
-        _draw_text(draw, fps_x + 26, fps_y + 16, f"{fps_value:.0f} FPS", size=12, fill="#1E293B", bold=True, anchor="lm")
-
-    # ─────────────────────────────────────────────────────
-    #  LEFT PANEL — Camera feed card
-    # ─────────────────────────────────────────────────────
-    def _draw_left_panel(self, img, draw, now):
-        pad  = self.PAD
-        x    = pad
-        y    = self.CONTENT_Y
-        w    = self.LEFT_W
-        h    = self.CONTENT_H
-        r    = 20
-
-        # Outer card (Dark)
-        draw_shadow_card(draw, x, y, w, h, r=r, bg=CARD_DARK, shadow_color=SHADOW, offset_y=4)
-
-        cam_pad = 8
-        cam_x   = x + cam_pad
-        cam_y   = y + cam_pad
-        cam_w   = w - cam_pad * 2
-        cam_h   = h - cam_pad * 2
-
-        if camera_hidden:
-            # ── Hidden placeholder ──
-            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_DARK))
-            cx_c = cam_x + cam_w // 2
-            cy_c = cam_y + cam_h // 2
-            draw.ellipse([cx_c - 30, cy_c - 18, cx_c + 30, cy_c + 18], outline=hex2rgb(TXT_FAINT), width=3)
-            draw.ellipse([cx_c - 10, cy_c - 10, cx_c + 10, cy_c + 10], fill=hex2rgb(TXT_FAINT))
-            draw.line([(cx_c - 35, cy_c - 25), (cx_c + 35, cy_c + 25)], fill=hex2rgb(TXT_FAINT), width=3)
-            _draw_text(draw, cx_c, cy_c + 45, "Camera Hidden", size=18, fill=TXT_FAINT, bold=True, anchor="mm")
-            _draw_text(draw, cx_c, cy_c + 72, "Press H to show", size=13, fill=TXT_FAINT, anchor="mm")
-            self._draw_camera_controls(img, draw, cam_x, cam_y, cam_w, cam_h)
-            return
+    def _draw_left_panel(self, now):
+        cx, cy, cw, ch = self.PAD, self.CONTENT_Y, self.LEFT_W, self.CONTENT_H
+        pad = 12
+        vx, vy, vw, vh = cx + pad, cy + pad, cw - pad * 2, ch - pad * 2
+        vr = 20
 
         with self._cam_lock:
             pil_cam = self._cam_pil
 
-        if pil_cam is not None:
-            # ── Letterbox ──
+        if camera_hidden:
+            sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
+            s_draw = ImageDraw.Draw(sub_img)
+            _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
+            _draw_text(s_draw, vw // 2, vh // 2 - 14, "Camera Feed Hidden", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
+            _draw_text(s_draw, vw // 2, vh // 2 + 18, "Press H to show", size=14, fill=TEXT_FAINT, bold=False, anchor="mm")
+            offset_x, offset_y, new_w, new_h = vx, vy, vw, vh
+            cam_crop = sub_img
+        elif pil_cam is not None:
             orig_w, orig_h = pil_cam.size
-            aspect = orig_w / orig_h
-
-            if cam_w / cam_h > aspect:
-                new_h = cam_h
-                new_w = int(cam_h * aspect)
+            aspect = orig_w / max(orig_h, 1)
+            if vw / vh > aspect:
+                new_h = vh
+                new_w = int(vh * aspect)
             else:
-                new_w = cam_w
-                new_h = int(cam_w / aspect)
+                new_w = vw
+                new_h = int(vw / aspect)
 
-            offset_x = cam_x + (cam_w - new_w) // 2
-            offset_y = cam_y + (cam_h - new_h) // 2
+            resized = pil_cam.resize((new_w, new_h), Image.Resampling.NEAREST)
+            offset_x = vx + (vw - new_w) // 2
+            offset_y = vy + (vh - new_h) // 2
 
-            resized = pil_cam.resize((new_w, new_h), Image.LANCZOS)
-            
-            # Subtle grid overlay
-            grid = Image.new("RGBA", (new_w, new_h), (0,0,0,0))
-            gd = ImageDraw.Draw(grid)
-            grid_color = (255, 255, 255, 15)
-            for gy in range(0, new_h, 40):
-                gd.line([(0, gy), (new_w, gy)], fill=grid_color, width=1)
-            for gx in range(0, new_w, 40):
-                gd.line([(gx, 0), (gx, new_h)], fill=grid_color, width=1)
-            resized = Image.alpha_composite(resized.convert("RGBA"), grid).convert("RGB")
+            # Cached mask for high-speed rendering
+            mask_key = (new_w, new_h, vr)
+            if self._cached_cam_mask_key != mask_key:
+                mask = Image.new("L", (new_w, new_h), 0)
+                m_draw = ImageDraw.Draw(mask)
+                m_draw.rounded_rectangle([0, 0, new_w, new_h], radius=vr, fill=255)
+                self._cached_cam_mask = mask
+                self._cached_cam_mask_key = mask_key
+            else:
+                mask = self._cached_cam_mask
 
-            mask_c = Image.new("L", (new_w, new_h), 0)
-            md = ImageDraw.Draw(mask_c)
-            md.rounded_rectangle([0, 0, new_w, new_h], radius=14, fill=255)
-            img.paste(resized, (offset_x, offset_y), mask_c)
+            cam_crop = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+            cam_crop.paste(resized, (0, 0), mask)
+            draw = ImageDraw.Draw(cam_crop)
+            draw.rounded_rectangle([0, 0, new_w - 1, new_h - 1],
+                                   radius=vr, outline=hex2rgb("#60A5FA"), width=1)
+        else:
+            sub_img = Image.new("RGBA", (vw, vh), (11, 19, 43, 255))
+            s_draw = ImageDraw.Draw(sub_img)
+            _rounded_rect(s_draw, 0, 0, vw, vh, vr, hex2rgb("#0B132B"))
+            _draw_text(s_draw, vw // 2, vh // 2, "Connecting Camera...", size=20, fill=TEXT_MUTED, bold=True, anchor="mm")
+            offset_x, offset_y, new_w, new_h = vx, vy, vw, vh
+            cam_crop = sub_img
 
-            # Subtle blue glow/border
-            draw.rounded_rectangle([offset_x, offset_y, offset_x + new_w, offset_y + new_h], radius=14, outline=hex2rgb(ACC_BLUE), width=2)
+        # ── Overlay HUD (cached unless state changes) ──────────────────────────
+        # Key: button states + size + calibration state
+        hud_key = (new_w, new_h, camera_hidden, bool(target_person_lock), is_calibrating,
+                   int(calibration_progress))
+        if self._cached_hud_overlay is None or self._cached_hud_key != hud_key:
+            hud = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+            h_draw = ImageDraw.Draw(hud)
 
-            # ── Badges ──
-            # Top-left badge: CAM-01 • ACTIVE FEED
-            tl_x = offset_x + 16
-            tl_y = offset_y + 16
-            tl_w = 200
-            tl_h = 32
-            draw_pill(draw, tl_x, tl_y, tl_w, tl_h, CARD_DARK)
-            # semi-transparent by using solid color since we can't easily alpha composite here without extra steps, 
-            # let's just use CARD_DARK which looks good
-            draw.ellipse([tl_x + 12, tl_y + 12, tl_x + 20, tl_y + 20], fill=hex2rgb(ACC_GREEN))
-            _draw_text(draw, tl_x + 30, tl_y + 16, "CAM-01 • ACTIVE FEED", size=11, fill=WHITE, bold=True, anchor="lm")
+            # 1. Top-Left Overlay Dock: 📹 CAM-01 •
+            tl_w, tl_h = 160, 36
+            tl_x, tl_y = 18, 18
+            h_draw.rounded_rectangle([tl_x, tl_y, tl_x + tl_w, tl_y + tl_h], radius=tl_h // 2,
+                                     fill=(15, 23, 42, 215), outline=hex2rgb("#475569"), width=1)
+            ic_cx, ic_cy = tl_x + 24, tl_y + tl_h // 2
+            h_draw.rounded_rectangle([ic_cx - 9, ic_cy - 6, ic_cx + 9, ic_cy + 6], radius=2, outline=hex2rgb(WHITE), width=2)
+            h_draw.polygon([(ic_cx + 10, ic_cy - 4), (ic_cx + 15, ic_cy - 6), (ic_cx + 15, ic_cy + 6), (ic_cx + 10, ic_cy + 4)], fill=hex2rgb(WHITE))
+            _draw_text(h_draw, tl_x + 48, tl_y + tl_h // 2, "CAM-01", size=12, fill=WHITE, bold=True, anchor="lm")
+            h_draw.ellipse([tl_x + 115, tl_y + tl_h // 2 - 4, tl_x + 123, tl_y + tl_h // 2 + 4], fill=hex2rgb(GREEN_ONLINE))
 
-            # Top-right badge: Shield + Target Locked
-            if target_person_lock is not None or is_calibrating:
-                tr_w = 280
-                tr_x = offset_x + new_w - tr_w - 16
-                tr_y = offset_y + 16
-                draw_pill(draw, tr_x, tr_y, tr_w, tl_h, CARD_DARK)
-                # Shield icon mock
-                draw.polygon([(tr_x+16, tr_y+10), (tr_x+24, tr_y+10), (tr_x+24, tr_y+20), (tr_x+20, tr_y+24), (tr_x+16, tr_y+20)], outline=hex2rgb(ACC_BLUE), width=2)
-                _draw_text(draw, tr_x + 32, tr_y + 16, "TARGET LOCKED (FSL: RIGHT HAND)", size=11, fill=WHITE, bold=True, anchor="lm")
+            # 2. Bottom-Center Floating Control Dock: 3 Buttons
+            self._draw_camera_controls_onto_crop(hud, h_draw, new_w, new_h, offset_x, offset_y)
 
-            # Bottom-right: CAM-01 • 1080p FHD
-            br_txt = "CAM-01 • 1080p FHD"
-            _draw_text(draw, offset_x + new_w - 16, offset_y + new_h - 20, br_txt, size=12, fill=WHITE, bold=True, anchor="rm")
+            # 3. Bottom-Right Overlay: CAM-01 • Resolution
+            br_w, br_h = 160, 32
+            br_x = new_w - br_w - 18
+            br_y = new_h - br_h - 22
+            h_draw.rounded_rectangle([br_x, br_y, br_x + br_w, br_y + br_h], radius=br_h // 2,
+                                     fill=(15, 23, 42, 215), outline=hex2rgb("#475569"), width=1)
+            cam_info_text = f"CAM-01 • {self.render_w}×{self.render_h}"
+            _draw_text(h_draw, br_x + br_w // 2, br_y + br_h // 2, cam_info_text, size=11, fill=WHITE, bold=True, anchor="mm")
 
-            # Calibration Guide
+            # 4. Calibration Progress Overlay
             if is_calibrating:
-                sil_cx = offset_x + new_w // 2
-                sil_cy = offset_y + new_h // 2 - 20
-                draw.ellipse([sil_cx - 50, sil_cy - 75, sil_cx + 50, sil_cy + 35], outline=hex2rgb(ACC_BLUE), width=3)
-                draw.arc([sil_cx - 120, sil_cy + 10, sil_cx + 120, sil_cy + 180], start=180, end=360, fill=hex2rgb(ACC_BLUE), width=3)
-
+                sil_cx = new_w // 2
+                sil_cy = new_h // 2 - 20
+                h_draw.ellipse([sil_cx - 50, sil_cy - 75, sil_cx + 50, sil_cy + 35], outline=hex2rgb(BLUE_PRIMARY), width=3)
+                h_draw.arc([sil_cx - 120, sil_cy + 10, sil_cx + 120, sil_cy + 180], start=180, end=360, fill=hex2rgb(BLUE_PRIMARY), width=3)
                 banner_h = 36
-                banner_y = offset_y + new_h - banner_h - 85
-                _rounded_rect(draw, offset_x + 60, banner_y, new_w - 120, banner_h, 18, hex2rgb(CARD_DARK))
-                _draw_text(draw, sil_cx, banner_y + banner_h//2, f"Calibrating Target Person... {calibration_progress:.0f}%", size=13, fill=WHITE, bold=True, anchor="mm")
-
+                banner_y = new_h - banner_h - 95
+                _rounded_rect(h_draw, 60, banner_y, new_w - 120, banner_h, 18, hex2rgb(CARD_DARK))
+                _draw_text(h_draw, sil_cx, banner_y + banner_h // 2, f"Calibrating Target Person... {calibration_progress:.0f}%", size=13, fill=WHITE, bold=True, anchor="mm")
                 bar_w_cal = int((new_w - 140) * (calibration_progress / 100.0))
                 if bar_w_cal > 0:
-                    _rounded_rect(draw, offset_x + 70, banner_y + banner_h - 5, bar_w_cal, 4, 2, hex2rgb(ACC_BLUE2))
-        else:
-            _rounded_rect(draw, cam_x, cam_y, cam_w, cam_h, 14, hex2rgb(CARD_DARK))
-            _draw_text(draw, cam_x + cam_w//2, cam_y + cam_h//2, "Camera Loading...", size=16, fill=TXT_FAINT, anchor="mm")
+                    _rounded_rect(h_draw, 70, banner_y + banner_h - 5, bar_w_cal, 4, 2, hex2rgb(BLUE_LIGHT))
 
-        self._draw_camera_controls(img, draw, cam_x, cam_y, cam_w, cam_h)
+            self._cached_hud_overlay = hud
+            self._cached_hud_key = hud_key
 
-    # ── Bottom-center camera control row: only the 3 buttons that actually do something ──
-    def _draw_camera_controls(self, img, draw, cam_x, cam_y, cam_w, cam_h):
-        btn_d   = 44
-        gap     = 14
-        n       = 3
-        total_w = n * btn_d + (n - 1) * gap
-        start_x = cam_x + (cam_w - total_w) // 2
-        cy      = cam_y + cam_h - btn_d - 20
+        # Composite: paste HUD overlay onto camera frame
+        if not camera_hidden and pil_cam is not None:
+            cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
 
-        # store rects for hit-testing in _on_click
+        # Scale cam_crop to match ui_scale for canvas
+        scaled_w = max(1, int(new_w * self.ui_scale))
+        scaled_h = max(1, int(new_h * self.ui_scale))
+        if scaled_w != new_w or scaled_h != new_h:
+            cam_crop = cam_crop.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+
+        self.cam_tk = ImageTk.PhotoImage(cam_crop)
+        self.canvas.itemconfig(self.cam_image_id, image=self.cam_tk)
+        self.canvas.coords(self.cam_image_id, self.ui_ox + int(offset_x * self.ui_scale), self.ui_oy + int(offset_y * self.ui_scale))
+
+    def _draw_camera_controls_onto_crop(self, img, draw, new_w, new_h, offset_x, offset_y):
+        dock_w, dock_h = 240, 56
+        dock_x = (new_w - dock_w) // 2
+        dock_y = new_h - dock_h - 22
+
+        draw.rounded_rectangle([dock_x, dock_y, dock_x + dock_w, dock_y + dock_h], radius=dock_h // 2,
+                               fill=(20, 35, 60, 205), outline=hex2rgb("#3B82F6"), width=1)
+
         self._cam_btn_rects = {}
-
+        btn_r = 20
+        gap = (dock_w - 6 * btn_r) // 4
         specs = [
-            ("cam",  "N", False),                        # switch camera (no persistent "on" state)
-            ("eye",  "H", camera_hidden),                 # camera visibility toggle
-            ("lock", "K", is_calibrating or target_person_lock is not None),  # calibrate / target lock
+            ("cam", False),
+            ("eye", not camera_hidden),
+            ("shield", target_person_lock is not None or is_calibrating),
         ]
 
-        for i, (key, hint, active) in enumerate(specs):
-            bx = start_x + i * (btn_d + gap)
-            by = cy
-            self._cam_btn_rects[key] = (bx, by, bx + btn_d, by + btn_d)
+        for i, (b_type, is_active) in enumerate(specs):
+            bx = dock_x + gap + i * (2 * btn_r + gap) + btn_r
+            by = dock_y + dock_h // 2
+            global_bx = offset_x + bx
+            global_by = offset_y + by
+            self._cam_btn_rects[b_type] = (global_bx - btn_r, global_by - btn_r, global_bx + btn_r, global_by + btn_r)
 
-            bg = ICON_BG_ON if active else "#1A2033"
-            fg = ACC_BLUE if active else WHITE
-            draw.ellipse([bx, by, bx + btn_d, by + btn_d], fill=hex2rgb(bg))
+            b_fill = "#2563EB" if is_active else "#1E293B"
+            draw.ellipse([bx - btn_r, by - btn_r, bx + btn_r, by + btn_r],
+                         fill=hex2rgb(b_fill), outline=hex2rgb("#60A5FA" if is_active else "#475569"), width=1)
 
-            ccx, ccy = bx + btn_d // 2, by + btn_d // 2
-            if key == "cam":
-                # simple camera glyph
-                draw.rounded_rectangle([ccx-10, ccy-7, ccx+10, ccy+7], radius=3, outline=hex2rgb(fg), width=2)
-                draw.ellipse([ccx-4, ccy-4, ccx+4, ccy+4], outline=hex2rgb(fg), width=2)
-            elif key == "eye":
+            if b_type == "cam":
+                draw.rounded_rectangle([bx - 8, by - 5, bx + 8, by + 5], radius=2, outline=hex2rgb(WHITE), width=2)
+                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], outline=hex2rgb(WHITE), width=2)
+            elif b_type == "eye":
+                draw.ellipse([bx - 9, by - 6, bx + 9, by + 6], outline=hex2rgb(WHITE), width=2)
+                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], fill=hex2rgb(WHITE))
                 if camera_hidden:
-                    draw.line([(ccx-11, ccy-9), (ccx+11, ccy+9)], fill=hex2rgb(fg), width=2)
-                draw.ellipse([ccx-11, ccy-7, ccx+11, ccy+7], outline=hex2rgb(fg), width=2)
-                draw.ellipse([ccx-3, ccy-3, ccx+3, ccy+3], fill=hex2rgb(fg))
-            elif key == "lock":
-                # target/shield glyph
-                draw.polygon([(ccx-9, ccy-8), (ccx+9, ccy-8), (ccx+9, ccy+4),
-                             (ccx, ccy+11), (ccx-9, ccy+4)], outline=hex2rgb(fg), width=2)
+                    draw.line([(bx - 8, by - 7), (bx + 8, by + 7)], fill=hex2rgb("#EF4444"), width=2)
+            elif b_type == "shield":
+                draw.polygon([(bx - 8, by - 7), (bx + 8, by - 7), (bx + 8, by + 3), (bx, by + 9), (bx - 8, by + 3)],
+                             outline=hex2rgb(WHITE), width=2)
 
-            # small keybind label under the button
-            _draw_text(draw, ccx, by + btn_d + 12, hint, size=9, fill=TXT_FAINT, bold=True, anchor="mm")
+    def _draw_right_panel(self, now):
+        rx, ry, rw, rh = self.RIGHT_X, self.CONTENT_Y, self.RIGHT_W, self.CONTENT_H
+        bmo_h = 114
 
-    # ─────────────────────────────────────────────────────
-    #  RIGHT PANEL — BMO + Detection Pipeline + Stability
-    # ─────────────────────────────────────────────────────
-    def _draw_right_panel(self, img, draw, now):
-        pad = self.PAD
-        x   = self.RIGHT_X
-        y   = self.CONTENT_Y
-        w   = self.RIGHT_W
-        h   = self.CONTENT_H
+        r_img = Image.new("RGBA", (rw, rh), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(r_img)
 
-        # ── BMO Card ──
-        bmo_h = 90
-        draw_shadow_card(draw, x, y, w, bmo_h, r=18, bg=CARD, shadow_color=SHADOW, offset_y=4)
+        # ── 1. Top Card: BMO Companion Header ──
+        av_pad = 18
+        av_d = 76
+        av_x = av_pad
+        av_y = (bmo_h - av_d) // 2
 
-        # BMO avatar image (square, rounded)
-        aw = 58; ah = 58
-        ax = x + 16; ay = y + (bmo_h - ah) // 2
-        face_pil = bmo_talk_pil if tts_is_speaking else bmo_idle_pil
-        if face_pil is not None:
-            resized_bmo = face_pil.resize((aw, ah), Image.LANCZOS)
-            mask_b = Image.new("L", (aw, ah), 0)
-            mbd    = ImageDraw.Draw(mask_b)
-            mbd.rounded_rectangle([0, 0, aw, ah], radius=12, fill=255)
-            _rounded_rect(draw, ax, ay, aw, ah, 12, hex2rgb(BMO_GREEN))
-            img.paste(resized_bmo, (ax, ay), mask_b)
+        draw_gradient_pill(r_img, av_x, av_y, av_d, av_d, "#38BDF8", "#2563EB", outline_col="#93C5FD")
+
+        # BMO Face
+        fc_cx = av_x + av_d // 2
+        fc_cy = av_y + av_d // 2
+        eye_offset = 12
+        draw.ellipse([fc_cx - eye_offset - 3, fc_cy - 5, fc_cx - eye_offset + 3, fc_cy + 1], fill=hex2rgb(TEXT_MAIN))
+        draw.ellipse([fc_cx + eye_offset - 3, fc_cy - 5, fc_cx + eye_offset + 3, fc_cy + 1], fill=hex2rgb(TEXT_MAIN))
+
+        if tts_is_speaking:
+            draw.ellipse([fc_cx - 4, fc_cy + 4, fc_cx + 4, fc_cy + 12], fill=hex2rgb(TEXT_MAIN))
         else:
-            _rounded_rect(draw, ax, ay, aw, ah, 12, hex2rgb(BMO_GREEN))
-            _draw_text(draw, ax+aw//2, ay+ah//2, "BMO", size=12, fill=WHITE, bold=True, anchor="mm")
+            draw.arc([fc_cx - 7, fc_cy + 2, fc_cx + 7, fc_cy + 10], start=20, end=160, fill=hex2rgb(TEXT_MAIN), width=2)
 
-        # BMO labels
-        label_x  = ax + aw + 16
-        _draw_text(draw, label_x, y + bmo_h//2 - 12, "BMO Companion", size=16, fill=TXT_DARK, bold=True, anchor="lm")
-        
-        # ONLINE badge
-        bx = label_x + 130
-        draw_pill(draw, bx, y + bmo_h//2 - 20, 60, 18, "#E6F6EC")
-        draw.ellipse([bx + 6, y + bmo_h//2 - 14, bx + 12, y + bmo_h//2 - 8], fill=hex2rgb(ACC_GREEN))
-        _draw_text(draw, bx + 16, y + bmo_h//2 - 11, "ONLINE", size=9, fill=ACC_GREEN, bold=True, anchor="lm")
+        # Labels
+        tx = av_x + av_d + 18
+        _draw_text(draw, tx, fc_cy - 12, "BMO Companion", size=20, fill=TEXT_MAIN, bold=True, anchor="lm")
+        w_bmotitle = draw.textlength("BMO Companion", font=_get_font(20, bold=True))
 
-        # Subtitle
-        sub_text = "Speaking translation..." if tts_is_speaking else "Listening for gesture stability..."
-        _draw_text(draw, label_x, y + bmo_h//2 + 10, sub_text, size=11, fill=TXT_MID, anchor="lm")
+        badge_x = int(tx + w_bmotitle + 14)
+        badge_y = fc_cy - 22
+        badge_w, badge_h = 76, 22
+        draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
+                               radius=badge_h // 2, fill=hex2rgb(GREEN_BG),
+                               outline=hex2rgb(GREEN_BORDER), width=1)
+        draw.ellipse([badge_x + 8, badge_y + 7, badge_x + 14, badge_y + 13], fill=hex2rgb(GREEN_ONLINE))
+        _draw_text(draw, badge_x + 20, badge_y + 11, "ONLINE", size=9, fill=GREEN_TEXT, bold=True, anchor="lm")
 
-        # Waveform icon (right side of BMO card)
-        wfx = x + w - 40
-        wfy = y + bmo_h//2 + 10
-        for i, amp in enumerate([3, 6, 9, 6, 3, 7, 4]):
-            xi = wfx + i * 4
-            draw.line([(xi, wfy-amp), (xi, wfy+amp)], fill=hex2rgb(ACC_BLUE), width=2)
+        sub_text = "Speaking translation..." if tts_is_speaking else (
+            "Partner sent you a message!" if (self.received_message and (now - self.received_message.get("time", 0)) < 15.0)
+            else "Listening for your signs..."
+        )
+        _draw_text(draw, tx, fc_cy + 14, sub_text, size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
 
-        # ── Detection Pipeline Card ──
-        det_y = y + bmo_h + pad
-        det_h = h - bmo_h - pad
-        draw_shadow_card(draw, x, det_y, w, det_h, r=18, bg=CARD, shadow_color=SHADOW, offset_y=4)
+        # Audio Waveform Equalizer
+        eq_x = rw - 70
+        eq_y = fc_cy
+        eq_amps = [5, 12, 18, 24, 15, 9, 4] if tts_is_speaking else [4, 8, 12, 18, 11, 7, 3]
+        for i, amp in enumerate(eq_amps):
+            bar_x = eq_x + i * 6
+            draw.line([(bar_x, eq_y - amp), (bar_x, eq_y + amp)], fill=hex2rgb(BLUE_PRIMARY), width=3)
 
-        # Header
-        _draw_text(draw, x + 20, det_y + 24, "DETECTION PIPELINE", size=11, fill=TXT_MID, bold=True, anchor="lm")
-        _draw_text(draw, x + w - 20, det_y + 24, "INFERENCE ACTIVE", size=11, fill=ACC_GREEN, bold=True, anchor="rm")
-        draw.ellipse([x + w - 140, det_y + 19, x + w - 130, det_y + 29], fill=hex2rgb(ACC_GREEN))
+        # ── 2. Bottom Card: Inference & Incoming Partner Messages ──
+        det_y = bmo_h + 18
+        det_h = rh - bmo_h - 18
 
-        # Big ring
-        ring_cx = x + w // 2
-        ring_cy = det_y + det_h // 2 - 30
-        ring_r  = min(w, det_h) // 4
-        ring_r  = max(60, min(ring_r, 110))
+        if self.received_message:
+            # Header Badge
+            draw.rounded_rectangle([24, det_y + 16, 224, det_y + 42],
+                                   radius=13, fill=hex2rgb(GREEN_BG),
+                                   outline=hex2rgb(GREEN_BORDER), width=1)
+            draw.ellipse([34, det_y + 25, 42, det_y + 33], fill=hex2rgb(GREEN_ONLINE))
+            _draw_text(draw, 48, det_y + 29, "CO-OP PARTNER MESSAGE", size=10, fill=GREEN_TEXT, bold=True, anchor="lm")
 
-        # Compute value for ring
-        current_time = time.time()
-        on_cooldown  = current_time < global_cooldown_end
+            # Caption Sentence Box
+            cap_y = det_y + 50
+            cap_h = 72
+            draw.rounded_rectangle([24, cap_y, rw - 24, cap_y + cap_h],
+                                   radius=14, fill=hex2rgb("#F8FBFE"),
+                                   outline=hex2rgb("#CFE2F7"), width=1)
 
-        if current_mode == 1:
-            if current_frame_prediction and not on_cooldown:
-                held  = current_time - stable_start_time
-                frac  = min(held / STABILIZATION_DELAY, 1.0) * 100
-                ring_lbl = current_frame_prediction.upper() or "-"
-                ring_col = ACC_BLUE
-            elif on_cooldown:
-                left  = global_cooldown_end - current_time
-                frac  = (1 - left / GLOBAL_COOLDOWN) * 100
-                ring_lbl = current_frame_prediction.upper() or "-"
-                ring_col = ACC_AMBER
+            cap_text = self.received_message.get("text", "")
+            disp_cap = cap_text[:39] + "..." if len(cap_text) > 42 else cap_text
+            _draw_text(draw, 40, cap_y + cap_h // 2, f'"{disp_cap}"', size=20, fill=TEXT_MAIN, bold=True, anchor="lm")
+
+            # Sign Previews Section
+            prv_lbl_y = cap_y + cap_h + 18
+            _draw_text(draw, 28, prv_lbl_y, "SIGN PREVIEWS", size=11, fill=BLUE_PRIMARY, bold=True, anchor="lm")
+
+            previews = self.received_message.get("previews", [])
+            if previews:
+                prv_y = prv_lbl_y + 14
+                card_w = min(105, int((rw - 56) / max(len(previews), 1)) - 10)
+                card_h = 104
+                for idx, (token, icon_im) in enumerate(previews[:6]):
+                    cx = 24 + idx * (card_w + 10)
+                    draw.rounded_rectangle([cx, prv_y, cx + card_w, prv_y + card_h],
+                                           radius=14, fill=hex2rgb("#FFFFFF"),
+                                           outline=hex2rgb("#CBDDF2"), width=1)
+                    try:
+                        thumb = icon_im.resize((52, 52), Image.Resampling.BILINEAR)
+                        if thumb.mode == "RGBA":
+                            r_img.paste(thumb, (cx + (card_w - 52) // 2, prv_y + 8), thumb)
+                        else:
+                            r_img.paste(thumb, (cx + (card_w - 52) // 2, prv_y + 8))
+                    except Exception:
+                        pass
+                    _draw_text(draw, cx + card_w // 2, prv_y + 78, token.upper(), size=11, fill=TEXT_MAIN, bold=True, anchor="mm")
             else:
-                frac  = 0.0
-                ring_lbl = current_frame_prediction.upper() if current_frame_prediction else "-"
-                ring_col = ACC_BLUE
+                _draw_text(draw, 28, prv_lbl_y + 24, "(No sign previews mapped for this sentence)", size=12, fill=TEXT_MUTED)
+
+            # Bottom Divider & Live Signer Status
+            div_y = det_y + det_h - 70
+            draw.line([(24, div_y), (rw - 24, div_y)], fill=hex2rgb("#DDEAF7"), width=1)
+            active_pred = current_frame_prediction if current_mode == 1 else (debug_motion_word if debug_motion_word != "--" else "")
+            live_text = f"LIVE RECOGNITION: {active_pred.upper()}" if active_pred else "LIVE RECOGNITION: Ready (Signing active)"
+            _draw_text(draw, 32, div_y + 35, live_text, size=14, fill=BLUE_PRIMARY if active_pred else TEXT_MUTED, bold=True, anchor="lm")
+
         else:
-            if on_cooldown:
-                left  = global_cooldown_end - current_time
-                frac  = (1 - left / GLOBAL_COOLDOWN) * 100
-                ring_col = ACC_AMBER
+            # Default Live Inference View
+            sq_size = 90
+            sq_x = (rw - sq_size) // 2
+            sq_y = det_y + (det_h - sq_size) // 2 - 20
+            w_cx = sq_x + sq_size // 2
+            w_cy = sq_y + sq_size // 2
+
+            active_mult = 1.3 if (current_frame_prediction or debug_motion_word not in ("--", "")) else 1.0
+            w_amps = [int(6 * active_mult), int(12 * active_mult), int(20 * active_mult), int(14 * active_mult), int(7 * active_mult)]
+            for i, amp in enumerate(w_amps):
+                xi = w_cx - 16 + i * 8
+                draw.line([(xi, w_cy - amp), (xi, w_cy + amp)], fill=hex2rgb(BLUE_PRIMARY), width=4)
+
+            status_y = sq_y + sq_size + 36
+            active_pred = current_frame_prediction if current_mode == 1 else (debug_motion_word if debug_motion_word != "--" else "")
+            if active_pred:
+                _draw_text(draw, rw // 2, status_y, f"Recognized: {active_pred.upper()}", size=18, fill=TEXT_MAIN, bold=True, anchor="mm")
             else:
-                frac  = (len(hand_sequence_buffer) / max(WORD_SEQ_LEN, 1)) * 100
-                ring_col = ACC_BLUE
-            ring_lbl = debug_motion_word.upper() if debug_motion_word != "--" else "-"
+                _draw_text(draw, rw // 2, status_y, "Waiting for your sign...", size=15, fill=TEXT_MUTED, bold=False, anchor="mm")
+                _draw_text(draw, rw // 2, status_y + 28, "Partner messages will appear here as captions & sign previews", size=12, fill=TEXT_FAINT, anchor="mm")
 
-        # Draw gradient ring
-        thickness = max(12, ring_r // 5)
-        draw_progress_arc(draw, ring_cx, ring_cy, ring_r, thickness, frac, 100.0, ring_col, bg_color="#F0F3F8", is_gradient=True, end_color=ACC_CYAN if ring_col == ACC_BLUE else None)
+        scaled_w = max(1, int(rw * self.ui_scale))
+        scaled_h = max(1, int(rh * self.ui_scale))
+        if scaled_w != rw or scaled_h != rh:
+            r_img = r_img.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
 
-        # Letter/word in centre
-        _draw_text(draw, ring_cx, ring_cy, ring_lbl, size=64, fill=TXT_DARK, bold=True, anchor="mm")
-        
-        # FSL LETTER label
-        _draw_text(draw, ring_cx, ring_cy + ring_r + 20, "FSL LETTER" if current_mode == 1 else "FSL WORD", size=12, fill=TXT_MID, bold=True, anchor="mm")
-
-        # ── Confidence progress bar ──
-        conf_val = (frac if current_mode == 1 else debug_motion_conf)
-        bar_y = ring_cy + ring_r + 55
-        bar_x = x + 28
-        bar_w = w - 56
-        bar_h = 8
-        
-        _draw_text(draw, bar_x, bar_y - 12, "Neural Confidence", size=11, fill=TXT_MID, anchor="lm")
-        _draw_text(draw, bar_x + bar_w, bar_y - 12, f"{conf_val:.1f}%", size=11, fill=ACC_CYAN, bold=True, anchor="rm")
-        
-        _rounded_rect(draw, bar_x, bar_y, bar_w, bar_h, bar_h//2, hex2rgb("#F0F3F8"))
-        if conf_val > 0:
-            fill_w = int(bar_w * (conf_val / 100.0))
-            if fill_w > 0:
-                _draw_gradient_bar(img, draw, bar_x, bar_y, fill_w, bar_h, 1.0, ACC_BLUE, ACC_CYAN)
-
-    # ─────────────────────────────────────────────────────
-    #  STATS ROW
-    # ─────────────────────────────────────────────────────
-    def _draw_stats_row(self, img, draw, now):
-        pad   = self.PAD
-        y     = self.CONTENT_Y + self.CONTENT_H + self.GAP
-        h     = self.STATS_H
-        W     = self.W
-
-        # Full-width clean card
-        draw_shadow_card(draw, pad, y, W - pad*2, h, r=14, bg=CARD, shadow_color=SHADOW, offset_y=3)
-
-        stab_val = min(debug_motion_conf / 100.0 if current_mode == 2
-                       else (min((time.time() - stable_start_time) /
-                                 STABILIZATION_DELAY, 1.0)
-                             if current_frame_prediction else 0.0), 1.0)
-
-        slots = [
-            ("NEURAL LANDMARKS", f"{node_count} Nodes", ACC_BLUE, "nodes"),
-            ("AMBIENT LUX", f"{int(lux_value)} Lux", ACC_AMBER, "lux"),
-            ("FOCAL DISTANCE", f"{int(dist_cm)} cm", ACC_PURPLE, "dist"),
-        ]
-
-        n_slots = 4
-        slot_w = (W - pad*2) // n_slots
-
-        for i, (label, val, col, icon_type) in enumerate(slots):
-            sx = pad + i * slot_w + 30
-            # Label
-            _draw_text(draw, sx, y + h//2 - 12, label, size=10, fill=TXT_MID, bold=True, anchor="lm")
-            # Value
-            _draw_text(draw, sx, y + h//2 + 10, val, size=18, fill=TXT_DARK, bold=True, anchor="lm")
-
-            # Polished icon badge container
-            ic_x = sx + slot_w - 75
-            ic_y = y + (h - 32) // 2
-            cx, cy = ic_x + 16, ic_y + 16
-
-            if icon_type == "nodes":
-                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
-                                       fill=hex2rgb("#EFF6FF"), outline=hex2rgb("#BFDBFE"), width=1)
-                draw.line([(cx-6, cy+5), (cx, cy-6)], fill=hex2rgb(ACC_BLUE), width=2)
-                draw.line([(cx+6, cy+5), (cx, cy-6)], fill=hex2rgb(ACC_BLUE), width=2)
-                draw.line([(cx-6, cy+5), (cx+6, cy+5)], fill=hex2rgb(ACC_BLUE), width=2)
-                draw.ellipse([cx-8, cy+3, cx-4, cy+7], fill=hex2rgb(ACC_BLUE))
-                draw.ellipse([cx+4, cy+3, cx+8, cy+7], fill=hex2rgb(ACC_BLUE))
-                draw.ellipse([cx-2, cy-8, cx+2, cy-4], fill=hex2rgb(ACC_BLUE))
-            elif icon_type == "lux":
-                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
-                                       fill=hex2rgb("#FFFBEB"), outline=hex2rgb("#FDE68A"), width=1)
-                draw.ellipse([cx-5, cy-5, cx+5, cy+5], fill=hex2rgb(ACC_AMBER))
-                draw.line([(cx-8, cy), (cx-6, cy)], fill=hex2rgb(ACC_AMBER), width=2)
-                draw.line([(cx+6, cy), (cx+8, cy)], fill=hex2rgb(ACC_AMBER), width=2)
-                draw.line([(cx, cy-8), (cx, cy-6)], fill=hex2rgb(ACC_AMBER), width=2)
-                draw.line([(cx, cy+6), (cx, cy+8)], fill=hex2rgb(ACC_AMBER), width=2)
-            elif icon_type == "dist":
-                draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
-                                       fill=hex2rgb("#FAF5FF"), outline=hex2rgb("#E9D5FF"), width=1)
-                draw.line([(cx-7, cy-6), (cx-7, cy+6)], fill=hex2rgb(ACC_PURPLE), width=2)
-                draw.line([(cx+7, cy-6), (cx+7, cy+6)], fill=hex2rgb(ACC_PURPLE), width=2)
-                draw.line([(cx-7, cy), (cx+7, cy)], fill=hex2rgb(ACC_PURPLE), width=1)
-                draw.ellipse([cx-2, cy-2, cx+2, cy+2], fill=hex2rgb(ACC_PURPLE))
-
-            # Vertical divider
-            if i < len(slots):
-                dx = pad + (i + 1) * slot_w
-                draw.line([(dx, y + 15), (dx, y + h - 15)], fill=hex2rgb("#EAECEF"), width=1)
-
-        # ── Stability section (right section) ──
-        stab_sx = pad + 3 * slot_w + 30
-        _draw_text(draw, stab_sx, y + h//2 - 12, "KINEMATIC STABILITY", size=10, fill=TXT_MID, bold=True, anchor="lm")
-        rms_val = max(0.0, 0.1 - (stab_val * 0.1))
-        _draw_text(draw, stab_sx, y + h//2 + 10, f"{rms_val:.2f} RMS", size=18, fill=TXT_DARK, bold=True, anchor="lm")
-
-        # Stability pulse badge
-        ic_x = stab_sx + slot_w - 75
-        ic_y = y + (h - 32) // 2
-        cx, cy = ic_x + 16, ic_y + 16
-        draw.rounded_rectangle([ic_x, ic_y, ic_x + 32, ic_y + 32], radius=8,
-                               fill=hex2rgb("#ECFDF5"), outline=hex2rgb("#A7F3D0"), width=1)
-        draw.line([(cx-9, cy), (cx-5, cy), (cx-2, cy-6), (cx+1, cy+6), (cx+4, cy-3), (cx+6, cy), (cx+9, cy)],
-                  fill=hex2rgb(ACC_GREEN), width=2)
-
-        bar_x2 = stab_sx + 110
-        bar_w2 = slot_w - 200
-        stab_y = y + h//2 + 6
-        stab_h = 8
-
-        _rounded_rect(draw, bar_x2, stab_y, bar_w2, stab_h, stab_h//2, hex2rgb("#F0F3F8"))
-        if stab_val > 0:
-            fill_w = int(bar_w2 * stab_val)
-            if fill_w > 0:
-                _draw_gradient_bar(img, draw, bar_x2, stab_y, fill_w, stab_h, 1.0, ACC_GREEN, ACC_CYAN)
-
-        dot_col2 = ACC_GREEN if stab_val > 0.5 else TXT_FAINT
-        draw.ellipse([bar_x2 + bar_w2 + 8, stab_y + 1, bar_x2 + bar_w2 + 14, stab_y + 7], fill=hex2rgb(dot_col2))
-
-    # ─────────────────────────────────────────────────────
-    #  BOTTOM OUTPUT BAR
-    # ─────────────────────────────────────────────────────
-    def _draw_bottom_bar(self, img, draw, now):
-        pad  = self.PAD
-        W    = self.W
-        H    = self.H
-        h    = self.BOT_H
-        y    = H - h - pad
-        r    = 18
-
-        draw_shadow_card(draw, pad, y, W - pad*2, h, r=r, bg=CARD, shadow_color=SHADOW, offset_y=4)
-
-        # ── Left: FSL OUTPUT Badge ──
-        out_x  = pad + 24
-        out_y  = y + 24
-        
-        # Gradient badge
-        bw, bh = 100, 24
-        grad, mask = gradient_pill(draw, 0, 0, bw, bh, ACC_BLUE, ACC_CYAN)
-        img.paste(grad, (out_x, out_y), mask)
-        _draw_text(draw, out_x + bw//2, out_y + bh//2, "FSL OUTPUT", size=10, fill=WHITE, bold=True, anchor="mm")
-
-        # ── Large text output field ──
-        out_h  = 54
-        spk_w  = 200
-        out_w  = W - pad*2 - spk_w - 80
-        
-        display = typed_output[-60:] if len(typed_output) > 60 else typed_output
-        _draw_text(draw, out_x, out_y + bh + 24, display or "", size=36, fill=TXT_DARK, bold=True, anchor="lm")
-
-        # Cursor blink
-        if int(now * 2) % 2 == 0:
-            cx_est = out_x + len(display) * 20 + 4
-            cx_est = min(cx_est, out_x + out_w - 10)
-            draw.line([(cx_est, out_y + bh + 4), (cx_est, out_y + bh + 44)], fill=hex2rgb(ACC_BLUE), width=4)
-
-        # ── Right: SPEAK OUTPUT Button ──
-        spk_h = 50
-        spk_x = W - pad - 24 - spk_w
-        spk_y = y + 24
-
-        # ── Determine speak button visual state ──
-        is_clicking = time.time() < self._spk_click_until
-        is_hovering = self._spk_hover and not is_clicking
-
-        # Click: press-in — shrink pill by 2px and shift down 1px
-        # Hover: brighten gradient end + glow ring
-        if is_clicking:
-            px, py, pw, ph = spk_x + 2, spk_y + 1, spk_w - 4, spk_h - 2
-            c1, c2 = "#1650B8", "#00A8CC"   # darker = pressed
-        elif is_hovering:
-            px, py, pw, ph = spk_x - 2, spk_y - 2, spk_w + 4, spk_h + 4
-            c1, c2 = ACC_BLUE2, "#40E4FF"   # lighter = lifted
-        else:
-            px, py, pw, ph = spk_x, spk_y, spk_w, spk_h
-            c1, c2 = ACC_BLUE, ACC_CYAN
-
-        # Hover glow ring — soft translucent halo drawn before the pill
-        if is_hovering:
-            glow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            gd   = ImageDraw.Draw(glow)
-            gd.rounded_rectangle([px - 6, py - 6, px + pw + 6, py + ph + 6],
-                                  radius=(ph + 12) // 2,
-                                  fill=(64, 180, 255, 35))
-            gd.rounded_rectangle([px - 3, py - 3, px + pw + 3, py + ph + 3],
-                                  radius=(ph + 6) // 2,
-                                  fill=(64, 180, 255, 25))
-            # img is RGB — composite via a temporary RGBA copy
-            base_rgba = img.convert("RGBA")
-            base_rgba.alpha_composite(glow)
-            img.paste(base_rgba.convert("RGB"))
-
-        # Gradient speak button
-        s_grad, s_mask = gradient_pill(draw, 0, 0, pw, ph, c1, c2)
-        img.paste(s_grad, (px, py), s_mask)
-
-        # Label — centred on the (possibly shifted) pill
-        lbl_x = px + pw // 2 + 10
-        lbl_y = py + ph // 2
-        _draw_text(draw, lbl_x, lbl_y, "SPEAK OUTPUT", size=14, fill=WHITE, bold=True, anchor="mm")
-
-        # Waveform bars — taller on hover, shorter on click
-        bar_amps = ([3, 6, 9, 6, 3] if is_clicking else
-                    [6, 11, 16, 11, 6] if is_hovering else
-                    [4, 8, 12, 8, 4])
-        for i, amp in enumerate(bar_amps):
-            xi  = px + 28 + i * 6
-            cy2 = py + ph // 2
-            draw.line([(xi, cy2 - amp), (xi, cy2 + amp)], fill=hex2rgb(WHITE), width=2)
-
-        # ── Footer line ──
-        footer_y = y + h - 24
-        draw.line([(pad + 24, footer_y - 10), (W - pad - 24, footer_y - 10)], fill=hex2rgb("#EAECEF"), width=1)
-        
-        _draw_text(draw, pad + 24, footer_y, "SHIELD FSL Neural Engine • 2025 Release", size=11, fill=TXT_FAINT, anchor="lm")
-
-        # Keybind hints — only the bindings that are actually wired up in _on_key
-        hints = "SPACE  Add space   •   BKSP  Delete   •   ENTER  Speak   •   C  Clear"
-        _draw_text(draw, W // 2, footer_y, hints, size=11, fill=TXT_MID, bold=True, anchor="mm")
-
-        _draw_text(draw, W - pad - 24, footer_y, "De La Salle-CSB FSL Verified", size=11, fill=TXT_FAINT, anchor="rm")
-
-    # ─────────────────────────────────────────────────────
-    #  NOTIFICATION TOAST (optimized — no pixel loop)
-    # ─────────────────────────────────────────────────────
-    def _draw_notification(self, img, draw, now):
-        if now >= notification_end:
-            return
-        alpha = min(1.0, (notification_end - now) / 0.35)
-        txt   = notification_text
-        nw    = max(200, len(txt) * 14 + 48)
-        nh    = 48
-        nx    = self.W // 2 - nw // 2
-        ny    = self.CONTENT_Y + self.CONTENT_H // 2 - nh // 2
-
-        # Create toast with solid accent color + alpha
-        a = int(220 * alpha)
-        toast = Image.new("RGBA", (nw, nh), (0, 0, 0, 0))
-        td = ImageDraw.Draw(toast)
-        c = hex2rgb(ACC_BLUE)
-        td.rounded_rectangle([0, 0, nw, nh], radius=nh//2, fill=c + (a,))
-
-        # Composite onto background
-        bg_roi = img.crop((nx, ny, nx + nw, ny + nh)).convert("RGBA")
-        merged = Image.alpha_composite(bg_roi, toast).convert("RGB")
-        img.paste(merged, (nx, ny))
-
-        # Text on top
-        draw2 = ImageDraw.Draw(img)
-        _draw_text(draw2, nx + nw//2, ny + nh//2, txt,
-                   size=16, fill=WHITE, bold=True, anchor="mm")
+        self.right_tk = ImageTk.PhotoImage(r_img)
+        self.canvas.itemconfig(self.right_image_id, image=self.right_tk)
+        self.canvas.coords(self.right_image_id, self.ui_ox + int(rx * self.ui_scale), self.ui_oy + int(ry * self.ui_scale))
 
     def destroy(self):
         self._running = False
-        cap.release()
+        cam_capture.stop()
+        try:
+            if sys.platform.startswith("win"):
+                ctypes.windll.winmm.timeEndPeriod(1)
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -2222,14 +2754,31 @@ def main():
     root = tk.Tk()
     app  = ShieldFSLApp(root)
 
+    # Launch Non-FSL Partner Window in the same process with live camera access
+    partner_app = NonFSLWindow(master=root, get_cam_fn=app.get_cam_frame)
+    app.partner_window = partner_app
+
     def _on_close():
+        try:
+            partner_app.window.destroy()
+        except Exception:
+            pass
         app.destroy()
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", _on_close)
+    partner_app.on_close_callback = _on_close
 
     # Start maximized / fullscreen-ready at 1920×1080
     root.state("zoomed")   # Windows maximized
+    root.deiconify()
+    root.lift()
+    root.focus_force()
+
+    if partner_app:
+        partner_app.window.deiconify()
+        partner_app.window.lift()
+
     root.mainloop()
 
 if __name__ == "__main__":
