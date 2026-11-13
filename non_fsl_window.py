@@ -9,90 +9,25 @@ from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageFont
 from coop_bus import coop_hub, load_icon_palette, get_icon_path_for_sign
 from sentence_translator import translate_sentence
 
+from ui_kit import (
+    BG_LIGHT, BG_CENTER, BG_DEEP,
+    CARD_BG, CARD_BORDER, CARD_RIM_SUB, CARD_SHADOW,
+    BLUE_PRIMARY, BLUE_LIGHT, BLUE_CYAN, BLUE_DARK,
+    TEXT_MAIN, TEXT_MUTED, TEXT_FAINT, WHITE,
+    GREEN_ONLINE, GREEN_BG, GREEN_BORDER, GREEN_TEXT,
+    RED_BTN, RED_BG, RED_BORDER,
+    BUBBLE_FSL, BUBBLE_FSL_BD, BUBBLE_PART, BUBBLE_PART_BD,
+    hex2rgb, _blend,
+    _get_font, _draw_text,
+    draw_gradient_pill,
+    create_ambient_background,
+)
+
 # ── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
 
-# ── Color Palette (Project B.M.O Neumorphic Glassmorphic System) ────────────
-BG_LIGHT      = "#D2E8FE"   # Luminous fresh sky blue canvas
-BG_CENTER     = "#E4F3FE"   # Soft center ambient highlight
-BG_DEEP       = "#C0DEFD"   # Rich pastel blue
 
-CARD_BG       = "#FFFFFF"   # Luminous frosted glass card body
-CARD_BORDER   = "#FFFFFF"   # Specular white rim highlight
-CARD_RIM_SUB  = "#D2E4F8"   # Subtle bottom rim line
-CARD_SHADOW   = "#7BAADF"   # Rich sky-blue diffused drop shadow
-
-BLUE_PRIMARY  = "#1D68FE"   # Vibrant electric cobalt blue
-BLUE_LIGHT    = "#4F9BFE"   # Bright electric azure
-BLUE_CYAN     = "#38BDF8"   # Sky cyan highlight
-BLUE_DARK     = "#1050E2"   # Deep active cobalt
-
-TEXT_MAIN     = "#0F172A"   # Obsidian slate
-TEXT_MUTED    = "#5A718F"   # Cool slate gray
-TEXT_FAINT    = "#8FA8C4"   # Refined placeholder text
-WHITE         = "#FFFFFF"
-
-GREEN_ONLINE  = "#10B981"   # Mint green status dot
-GREEN_BG      = "#ECFDF5"   # Mint pill background
-GREEN_BORDER  = "#A7F3D0"   # Mint pill border
-GREEN_TEXT    = "#059669"   # Mint pill text
-
-RED_BTN       = "#EF4444"
-RED_BG        = "#FEE2E2"
-RED_BORDER    = "#FECACA"
-
-BUBBLE_FSL    = "#DBEAFE"
-BUBBLE_FSL_BD = "#93C5FD"
-BUBBLE_PART   = "#E0F2FE"
-BUBBLE_PART_BD= "#7DD3FC"
-
-
-# ── Color & Drawing Helpers ────────────────────────────────────────────────
-def hex2rgb(h):
-    h = h.lstrip("#")
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-def _blend(c1, c2, t):
-    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
-
-_font_cache = {}
-
-def _get_font(size=14, bold=False):
-    key = (size, bold)
-    if key in _font_cache:
-        return _font_cache[key]
-    candidates_bold = [
-        "C:/Windows/Fonts/segoeuib.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/calibrib.ttf",
-    ]
-    candidates_reg = [
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-    ]
-    candidates = candidates_bold if bold else candidates_reg
-    for p in candidates:
-        if os.path.exists(p):
-            try:
-                f = ImageFont.truetype(p, size)
-                _font_cache[key] = f
-                return f
-            except Exception:
-                pass
-    f = ImageFont.load_default()
-    _font_cache[key] = f
-    return f
-
-def _draw_text(draw, x, y, text, size=14, fill=TEXT_MAIN, bold=False, anchor="mm"):
-    if not text:
-        return
-    f = _get_font(size, bold)
-    try:
-        draw.text((x, y), text, font=f, fill=hex2rgb(fill), anchor=anchor)
-    except Exception:
-        draw.text((x, y), text, font=f, fill=hex2rgb(fill))
 
 def draw_glass_card(img: Image.Image, x, y, w, h, r=26,
                     bg_color=CARD_BG, shadow_color=CARD_SHADOW,
@@ -117,67 +52,6 @@ def draw_glass_card(img: Image.Image, x, y, w, h, r=26,
     c_border = hex2rgb(border_color)
     cdraw.rounded_rectangle([0, 0, w, h], radius=r, outline=c_border + (255,), width=1)
     img.paste(card_img, (x, y), card_img)
-
-_gradient_pill_cache = {}
-
-def draw_gradient_pill(img, x, y, w, h, c1_hex, c2_hex, outline_col=None):
-    if w <= 0 or h <= 0:
-        return
-    cache_key = (w, h, c1_hex, c2_hex, outline_col)
-    if cache_key in _gradient_pill_cache:
-        grad, mask = _gradient_pill_cache[cache_key]
-        img.paste(grad, (x, y), mask)
-        return
-    r = h // 2
-    c1, c2 = hex2rgb(c1_hex), hex2rgb(c2_hex)
-    t = np.linspace(0, 1, max(w, 1), dtype=np.float32)
-    arr = np.zeros((h, w, 4), dtype=np.uint8)
-    arr[:, :, 0] = (c1[0] * (1 - t) + c2[0] * t).astype(np.uint8)
-    arr[:, :, 1] = (c1[1] * (1 - t) + c2[1] * t).astype(np.uint8)
-    arr[:, :, 2] = (c1[2] * (1 - t) + c2[2] * t).astype(np.uint8)
-    arr[:, :, 3] = 255
-    grad = Image.fromarray(arr, "RGBA")
-    if outline_col:
-        gd = ImageDraw.Draw(grad)
-        gd.rounded_rectangle([0, 0, w-1, h-1], radius=r, outline=hex2rgb(outline_col) + (200,), width=1)
-    mask = Image.new("L", (w, h), 0)
-    md = ImageDraw.Draw(mask)
-    md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
-    _gradient_pill_cache[cache_key] = (grad.copy(), mask.copy())
-    img.paste(grad, (x, y), mask)
-
-def create_ambient_background(W, H):
-    """Generates the rich, modern sky-blue neumorphic background matching ShieldFSLApp."""
-    bg_top = (210, 232, 254)
-    bg_mid = (228, 243, 254)
-    bg_bot = (192, 222, 253)
-    bg = Image.new("RGBA", (W, H))
-    draw = ImageDraw.Draw(bg)
-    for y in range(H):
-        t = y / max(H - 1, 1)
-        if t < 0.35:
-            c = _blend(bg_top, bg_mid, t / 0.35)
-        else:
-            c = _blend(bg_mid, bg_bot, (t - 0.35) / 0.65)
-        draw.line([(0, y), (W, y)], fill=c + (255,))
-
-    glows = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gdraw = ImageDraw.Draw(glows)
-    gdraw.ellipse([W - 680, -260, W + 360, 580], fill=(255, 255, 255, 140))
-    gdraw.ellipse([-220, -220, 680, 520], fill=(165, 220, 255, 110))
-    gdraw.ellipse([-150, 400, 450, 900], fill=(180, 225, 255, 80))
-    gdraw.ellipse([-320, H - 560, 520, H + 320], fill=(145, 202, 253, 95))
-    gdraw.ellipse([W - 720, H - 460, W + 260, H + 260], fill=(155, 212, 254, 95))
-    glows = glows.filter(ImageFilter.GaussianBlur(85))
-    bg.alpha_composite(glows)
-
-    curves = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    cdraw = ImageDraw.Draw(curves)
-    cdraw.ellipse([W - 760, -190, W + 320, 560], fill=(238, 248, 255, 90))
-    cdraw.ellipse([-260, H - 410, 490, H + 230], fill=(232, 245, 255, 80))
-    curves = curves.filter(ImageFilter.GaussianBlur(36))
-    bg.alpha_composite(curves)
-    return bg.convert("RGB")
 
 
 # ── Non-FSL Partner App (PIL Canvas Twin) ───────────────────────────────────

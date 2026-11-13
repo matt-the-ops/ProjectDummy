@@ -32,6 +32,28 @@ from sentence_translator import translate_sentence
 from coop_bus import coop_hub
 from non_fsl_window import NonFSLWindow
 
+from ui_kit import (
+    BG_LIGHT, BG_CENTER, BG_DEEP,
+    CARD_BG, CARD_BORDER, CARD_RIM_SUB, CARD_SHADOW,
+    BLUE_PRIMARY, BLUE_LIGHT, BLUE_CYAN, BLUE_DARK,
+    TEXT_MAIN, TEXT_MUTED, TEXT_FAINT, WHITE,
+    GREEN_ONLINE, GREEN_BG, GREEN_BORDER, GREEN_TEXT,
+    RED_BTN, RED_BG, RED_BORDER,
+    BUBBLE_FSL, BUBBLE_FSL_BD, BUBBLE_PART, BUBBLE_PART_BD,
+    DOCK_DARK_BG,
+    BG_TOP, BG_BOT, CARD, CARD_DARK, SHADOW, SHADOW_D,
+    ICON_BG, ICON_BG_ON, TXT_DARK, TXT_MID, TXT_FAINT,
+    ACC_BLUE, ACC_BLUE2, ACC_CYAN, ACC_NAVY, ACC_GREEN, ACC_RED,
+    ACC_AMBER, ACC_PURPLE, BMO_GREEN,
+    hex2rgb, _blend, rgb2hex,
+    draw_glass_card, draw_shadow_card, _rounded_rect,
+    draw_pill, draw_pill_outline,
+    draw_gradient_pill, gradient_pill,
+    _get_font, _get_tk_font, _round_rect_pts,
+    create_ambient_background,
+)
+from camera import CameraCapture
+
 try:
     import mediapipe.solutions.holistic as mp_holistic
     import mediapipe.solutions.drawing_utils as mp_drawing
@@ -453,255 +475,6 @@ def extract_face_frame(results):
         out.extend([0.0] * 1404)
     return out
 
-# ─────────────────────────────────────────────
-#  Modern Colour Palette (Project B.M.O)
-# ─────────────────────────────────────────────
-# Tkinter hex colours & Neumorphic Palette (Modernized Sky Blue)
-BG_LIGHT      = "#D2E8FE"   # Luminous fresh sky blue canvas
-BG_CENTER     = "#E4F3FE"   # Soft center ambient highlight
-BG_DEEP       = "#C0DEFD"   # Rich pastel blue
-
-CARD_BG       = "#FFFFFF"   # Luminous frosted glass card body
-CARD_BORDER   = "#FFFFFF"   # Specular white rim highlight
-CARD_RIM_SUB  = "#D2E4F8"   # Subtle bottom rim line
-CARD_SHADOW   = "#7BAADF"   # Rich sky-blue diffused drop shadow (NOT grey!)
-
-BLUE_PRIMARY  = "#1D68FE"   # Vibrant electric cobalt blue (matches Photoshop title & buttons)
-BLUE_LIGHT    = "#4F9BFE"   # Bright electric azure
-BLUE_CYAN     = "#38BDF8"   # Sky cyan highlight
-BLUE_DARK     = "#1050E2"   # Deep active cobalt
-
-TEXT_MAIN     = "#0F172A"   # Crisp high-contrast obsidian slate
-TEXT_MUTED    = "#5A718F"   # Cool slate gray for subtitles/labels
-TEXT_FAINT    = "#8FA8C4"   # Refined placeholder text
-WHITE         = "#FFFFFF"
-
-GREEN_ONLINE  = "#10B981"   # Mint green status dot
-GREEN_BG      = "#ECFDF5"   # Mint pill background
-GREEN_BORDER  = "#A7F3D0"   # Mint pill border
-GREEN_TEXT    = "#059669"   # Mint pill text
-
-DOCK_DARK_BG  = (22, 36, 60, 185)  # Dark translucent glass overlay on video
-
-# Legacy aliases for compatibility
-BG_TOP      = BG_LIGHT
-BG_BOT      = BG_DEEP
-CARD        = CARD_BG
-CARD_DARK   = "#0B132B"
-SHADOW      = CARD_SHADOW
-SHADOW_D    = "#DCEBF9"
-ICON_BG     = "#E6F1FC"
-ICON_BG_ON  = "#DBEAFE"
-TXT_DARK    = TEXT_MAIN
-TXT_MID     = TEXT_MUTED
-TXT_FAINT   = TEXT_FAINT
-ACC_BLUE    = BLUE_PRIMARY
-ACC_BLUE2   = BLUE_LIGHT
-ACC_CYAN    = BLUE_CYAN
-ACC_NAVY    = "#16243C"
-ACC_GREEN   = GREEN_ONLINE
-ACC_RED     = "#EF4444"
-ACC_AMBER   = "#F59E0B"
-ACC_PURPLE  = "#8B5CF6"
-BMO_GREEN   = "#22C55E"
-
-
-# ─────────────────────────────────────────────
-#  PIL Drawing Helpers
-# ─────────────────────────────────────────────
-def hex2rgb(h):
-    h = h.lstrip('#')
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-def _blend(c1, c2, t):
-    return tuple(int(c1[i]*(1-t) + c2[i]*t) for i in range(3))
-
-def rgb2hex(r, g, b):
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-def draw_glass_card(img: Image.Image, x, y, w, h, r=26,
-                    bg_color=CARD_BG, shadow_color=CARD_SHADOW,
-                    border_color=CARD_BORDER, shadow_offset=(0, 9),
-                    shadow_blur=20, shadow_alpha=115):
-    """
-    Renders an authentic neumorphic-glassmorphic card:
-    - Multi-layered soft diffused ambient sky-blue shadow (floating depth)
-    - Crisp specular glass white rim highlight
-    - Clean luminous white-to-ice gradient card fill
-    """
-    pad = shadow_blur * 2
-    sw = w + pad * 2
-    sh = h + pad * 2
-    
-    shadow_img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
-    sdraw = ImageDraw.Draw(shadow_img)
-    sc = hex2rgb(shadow_color)
-    
-    sx0 = pad
-    sy0 = pad + shadow_offset[1]
-    sdraw.rounded_rectangle([sx0, sy0, sx0 + w, sy0 + h], radius=r, fill=sc + (shadow_alpha,))
-    shadow_blurred = shadow_img.filter(ImageFilter.GaussianBlur(shadow_blur))
-    
-    img.paste(shadow_blurred, (x - pad, y - pad), shadow_blurred)
-    
-    card_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    cdraw = ImageDraw.Draw(card_img)
-    
-    bg_top = (255, 255, 255)
-    bg_bot = (244, 250, 255)
-    for row in range(h):
-        t = row / max(h - 1, 1)
-        c = _blend(bg_top, bg_bot, t)
-        cdraw.line([(0, row), (w, row)], fill=c + (252,))
-        
-    mask = Image.new("L", (w, h), 0)
-    m_draw = ImageDraw.Draw(mask)
-    m_draw.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
-    
-    # Crisp specular white rim highlight
-    b_col = hex2rgb(border_color)
-    cdraw.rounded_rectangle([0, 0, w-1, h-1], radius=r, outline=b_col + (255,), width=2)
-    
-    img.paste(card_img, (x, y), mask)
-
-def draw_shadow_card(draw: ImageDraw.ImageDraw, x, y, w, h, r=18,
-                     bg=CARD, shadow_color=SHADOW, blur=8, offset_y=4):
-    """Draw a card with a clean, smooth multi-pass diffused drop shadow."""
-    bgc = hex2rgb(bg)
-    if shadow_color:
-        sc = hex2rgb(shadow_color)
-        soft_outer = _blend(sc, hex2rgb(BG_BOT), 0.55)
-        _rounded_rect(draw, x - 1, y + offset_y + 2, w + 2, h + 2, r + 2, soft_outer)
-        _rounded_rect(draw, x, y + offset_y, w, h, r, sc)
-    _rounded_rect(draw, x, y, w, h, r, bgc)
-
-def _rounded_rect(draw, x, y, w, h, r, fill):
-    """Fill a rounded rectangle on a PIL ImageDraw."""
-    r  = max(0, int(r))
-    x, y, w, h = int(x), int(y), int(w), int(h)
-    draw.rectangle([x+r, y, x+w-r, y+h], fill=fill)
-    draw.rectangle([x, y+r, x+w, y+h-r], fill=fill)
-    draw.ellipse([x, y, x+2*r, y+2*r], fill=fill)
-    draw.ellipse([x+w-2*r, y, x+w, y+2*r], fill=fill)
-    draw.ellipse([x, y+h-2*r, x+2*r, y+h], fill=fill)
-    draw.ellipse([x+w-2*r, y+h-2*r, x+w, y+h], fill=fill)
-
-def draw_pill(draw, x, y, w, h, fill):
-    r = h // 2
-    _rounded_rect(draw, x, y, w, h, r, hex2rgb(fill) if isinstance(fill, str) else fill)
-
-def draw_pill_outline(draw, x, y, w, h, outline, width=2):
-    r = h // 2
-    draw.rounded_rectangle([x, y, x+w, y+h], radius=r,
-                            outline=hex2rgb(outline) if isinstance(outline, str) else outline, width=width)
-
-_gradient_pill_cache = {}
-
-def draw_gradient_pill(img, x, y, w, h, c1_hex, c2_hex, outline_col=None):
-    if w <= 0 or h <= 0:
-        return
-    cache_key = (w, h, c1_hex, c2_hex, outline_col)
-    cached = _gradient_pill_cache.get(cache_key)
-    if cached is not None:
-        img.paste(cached[0], (x, y), cached[1])
-        return
-    r = h // 2
-    c1, c2 = hex2rgb(c1_hex), hex2rgb(c2_hex)
-    # Vectorized gradient via numpy — replaces slow per-pixel Python loop
-    t = np.linspace(0, 1, max(w, 1), dtype=np.float32)
-    arr = np.zeros((h, w, 4), dtype=np.uint8)
-    arr[:, :, 0] = (c1[0] * (1 - t) + c2[0] * t).astype(np.uint8)
-    arr[:, :, 1] = (c1[1] * (1 - t) + c2[1] * t).astype(np.uint8)
-    arr[:, :, 2] = (c1[2] * (1 - t) + c2[2] * t).astype(np.uint8)
-    arr[:, :, 3] = 255
-    grad = Image.fromarray(arr, "RGBA")
-    if outline_col:
-        gd = ImageDraw.Draw(grad)
-        gd.rounded_rectangle([0, 0, w-1, h-1], radius=r, outline=hex2rgb(outline_col) + (200,), width=1)
-    mask = Image.new("L", (w, h), 0)
-    md = ImageDraw.Draw(mask)
-    md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
-    _gradient_pill_cache[cache_key] = (grad.copy(), mask.copy())
-    img.paste(grad, (x, y), mask)
-
-def gradient_pill(draw, x, y, w, h, c1, c2):
-    """Horizontal gradient pill."""
-    r = h // 2
-    grad = Image.new("RGB", (w, h))
-    gd   = ImageDraw.Draw(grad)
-    for i in range(w):
-        t  = i / max(w-1, 1)
-        gc = _blend(hex2rgb(c1), hex2rgb(c2), t)
-        gd.line([(i, 0), (i, h)], fill=gc)
-    mask = Image.new("L", (w, h), 0)
-    md   = ImageDraw.Draw(mask)
-    md.rounded_rectangle([0, 0, w, h], radius=r, fill=255)
-    return grad, mask
-
-def _get_tk_font(size=14, bold=False):
-    weight = "bold" if bold else "normal"
-    return ("Segoe UI", max(8, int(size)), weight)
-
-def _round_rect_pts(x0, y0, x1, y1, r):
-    r = min(max(1, r), abs(x1 - x0) // 2, abs(y1 - y0) // 2)
-    return [
-        x0 + r, y0,
-        x1 - r, y0,
-        x1, y0,
-        x1, y0 + r,
-        x1, y1 - r,
-        x1, y1,
-        x1 - r, y1,
-        x0 + r, y1,
-        x0, y1,
-        x0, y1 - r,
-        x0, y0 + r,
-        x0, y0
-    ]
-
-def create_ambient_background(W, H):
-    """Generates a rich, luminous modern sky-blue neumorphic ambient background."""
-    bg_top = (210, 232, 254)   # #D2E8FE - luminous fresh sky blue
-    bg_mid = (228, 243, 254)   # #E4F3FE - soft radiant center
-    bg_bot = (192, 222, 253)   # #C0DEFD - rich pastel blue
-
-    bg = Image.new("RGBA", (W, H))
-    draw = ImageDraw.Draw(bg)
-    for y in range(H):
-        t = y / max(H - 1, 1)
-        if t < 0.35:
-            c = _blend(bg_top, bg_mid, t / 0.35)
-        else:
-            c = _blend(bg_mid, bg_bot, (t - 0.35) / 0.65)
-        draw.line([(0, y), (W, y)], fill=c + (255,))
-
-    # Luminous ambient lighting blooms
-    glows = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gdraw = ImageDraw.Draw(glows)
-    # Top-right bright radiant bloom
-    gdraw.ellipse([W - 680, -260, W + 360, 580], fill=(255, 255, 255, 140))
-    # Top-left ambient soft cyan
-    gdraw.ellipse([-220, -220, 680, 520], fill=(165, 220, 255, 110))
-    # Center-left subtle sky blue
-    gdraw.ellipse([-150, 400, 450, 900], fill=(180, 225, 255, 80))
-    # Bottom-left rich blue wave
-    gdraw.ellipse([-320, H - 560, 520, H + 320], fill=(145, 202, 253, 95))
-    # Bottom-right cerulean
-    gdraw.ellipse([W - 720, H - 460, W + 260, H + 260], fill=(155, 212, 254, 95))
-    glows = glows.filter(ImageFilter.GaussianBlur(85))
-    bg.alpha_composite(glows)
-
-    # Soft 3D Neumorphic ambient wave curves (smooth layered depth)
-    curves = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    cdraw = ImageDraw.Draw(curves)
-    # Smooth curved raised surface top-right
-    cdraw.ellipse([W - 760, -190, W + 320, 560], fill=(238, 248, 255, 90))
-    # Smooth curved raised surface bottom-left
-    cdraw.ellipse([-260, H - 410, 490, H + 230], fill=(232, 245, 255, 80))
-    curves = curves.filter(ImageFilter.GaussianBlur(36))
-    bg.alpha_composite(curves)
-
-    return bg.convert("RGB")
 
 
 # ─────────────────────────────────────────────
@@ -979,105 +752,6 @@ def validate_and_filter_target(results):
             d_nose = math.sqrt((rw.x - locked_nose[0])**2 + (rw.y - locked_nose[1])**2)
             if min(d_sh, d_nose) > max_reach:
                 results.right_hand_landmarks = None
-
-# ─────────────────────────────────────────────
-#  High-Speed Threaded Camera Capture (30-60 FPS)
-# ─────────────────────────────────────────────
-class CameraCapture:
-    """Threaded camera grabber that continuously fetches frames at 30-60 FPS without blocking ML/GUI loops."""
-    def __init__(self, camera_index=0):
-        self.camera_index = camera_index
-        self.cap = None
-        self.running = False
-        self.lock = threading.Lock()
-        self.latest_frame = None
-        self.fps_tracker = collections.deque(maxlen=30)
-        self.cam_fps = 0.0
-        self.thread = None
-        self.start()
-
-    def _init_camera(self):
-        with self.lock:
-            if self.cap is not None:
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-
-            backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
-            cap = cv2.VideoCapture(self.camera_index, backend)
-            if not cap.isOpened() and backend != cv2.CAP_ANY:
-                cap = cv2.VideoCapture(self.camera_index)
-
-            if cap.isOpened():
-                # Set MJPG & 640x480 at high framerate with 1-frame buffer for low latency
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_FPS, 60)
-                try:
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
-            self.cap = cap
-
-    def start(self):
-        if not self.running:
-            self.running = True
-            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-            self.thread.start()
-
-    def _capture_loop(self):
-        self._init_camera()
-        while self.running:
-            with self.lock:
-                cap_ref = self.cap
-            if cap_ref is None or not cap_ref.isOpened():
-                time.sleep(0.04)
-                continue
-            ret, frame = cap_ref.read()
-            if not ret or frame is None:
-                time.sleep(0.01)
-                continue
-
-            now = time.time()
-            self.fps_tracker.append(now)
-            if len(self.fps_tracker) > 1:
-                self.cam_fps = (len(self.fps_tracker) - 1) / max(self.fps_tracker[-1] - self.fps_tracker[0], 1e-4)
-
-            with self.lock:
-                self.latest_frame = frame
-
-    def read(self):
-        with self.lock:
-            if self.latest_frame is not None:
-                return True, self.latest_frame.copy()
-            return False, None
-
-    def switch_camera(self, new_index):
-        with self.lock:
-            self.camera_index = new_index
-            if self.cap is not None:
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-        threading.Thread(target=self._init_camera, daemon=True).start()
-
-    def release(self):
-        self.running = False
-        with self.lock:
-            if self.cap is not None:
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-
-    def stop(self):
-        self.release()
 
 cam_capture = CameraCapture(camera_index)
 cap = cam_capture  # Seamless drop-in replacement
@@ -2656,38 +2330,6 @@ def _draw_gradient_bar(img: Image.Image, draw: ImageDraw.ImageDraw,
     mgd.rounded_rectangle([0, 0, gw, h], radius=r, fill=255)
     img.paste(grad, (x, y), mask_g)
 
-
-# ─────────────────────────────────────────────
-#  Text Drawing Helper (PIL with system font)
-# ─────────────────────────────────────────────
-_font_cache: dict = {}
-
-def _get_font(size=14, bold=False):
-    key = (size, bold)
-    if key in _font_cache:
-        return _font_cache[key]
-    candidates_bold = [
-        "C:/Windows/Fonts/segoeuib.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/calibrib.ttf",
-    ]
-    candidates_reg = [
-        "C:/Windows/Fonts/segoeui.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-    ]
-    candidates = candidates_bold if bold else candidates_reg
-    for path in candidates:
-        if os.path.exists(path):
-            try:
-                f = ImageFont.truetype(path, size)
-                _font_cache[key] = f
-                return f
-            except Exception:
-                pass
-    f = ImageFont.load_default()
-    _font_cache[key] = f
-    return f
 
 def _draw_text(draw, x, y, text, size=14, fill=TXT_DARK,
                bold=False, anchor="lm"):
