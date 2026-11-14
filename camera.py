@@ -9,6 +9,7 @@ import time
 import collections
 
 import cv2
+import numpy as np
 
 
 class CameraCapture:
@@ -22,6 +23,10 @@ class CameraCapture:
         self.fps_tracker = collections.deque(maxlen=30)
         self.cam_fps = 0.0
         self.thread = None
+        self._fail_count = 0
+        self._backoff = 0.25
+        self._expected_size = None
+        self.mirror = True
         self.start()
 
     def _init_camera(self):
@@ -50,6 +55,7 @@ class CameraCapture:
 
         with self.lock:
             self.cap = cap
+        self._expected_size = None
 
     def start(self):
         if not self.running:
@@ -59,30 +65,81 @@ class CameraCapture:
 
     def _capture_loop(self):
         self._init_camera()
+        FAIL_THRESHOLD = 8
         while self.running:
             with self.lock:
                 cap_ref = self.cap
             if cap_ref is None or not cap_ref.isOpened():
+                self._fail_count += 1
+                if self._fail_count >= FAIL_THRESHOLD:
+                    self._reinit_with_backoff()
+                    self._fail_count = 0
                 time.sleep(0.04)
                 continue
             ret, frame = cap_ref.read()
-            if not ret or frame is None:
-                time.sleep(0.01)
+            if not ret or frame is None or frame.size == 0:
+                self._fail_count += 1
+                if self._fail_count >= FAIL_THRESHOLD:
+                    self._reinit_with_backoff()
+                    self._fail_count = 0
+                time.sleep(0.02)
                 continue
+
+            h, w = frame.shape[:2]
+            if self._expected_size is None:
+                self._expected_size = (h, w)
+            elif (h, w) != self._expected_size:
+                self._fail_count += 1
+                if self._fail_count >= FAIL_THRESHOLD:
+                    self._reinit_with_backoff()
+                    self._fail_count = 0
+                time.sleep(0.02)
+                continue
+
+            # Quick corruption check: sample a few pixels, reject near-zero variance (static/black)
+            try:
+                sample = frame[::20, ::20].astype(np.uint16)
+                if sample.std() < 2.0:
+                    self._fail_count += 1
+                    if self._fail_count >= FAIL_THRESHOLD:
+                        self._reinit_with_backoff()
+                        self._fail_count = 0
+                    time.sleep(0.02)
+                    continue
+            except Exception:
+                pass
 
             now = time.time()
             self.fps_tracker.append(now)
             if len(self.fps_tracker) > 1:
                 self.cam_fps = (len(self.fps_tracker) - 1) / max(self.fps_tracker[-1] - self.fps_tracker[0], 1e-4)
 
+            self._fail_count = 0
             with self.lock:
                 self.latest_frame = frame
+
+    def _reinit_with_backoff(self):
+        if not self.running:
+            return
+        with self.lock:
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+        time.sleep(self._backoff)
+        self._backoff = min(self._backoff * 2, 2.0)
+        self._init_camera()
 
     def read(self):
         with self.lock:
             if self.latest_frame is not None:
                 return True, self.latest_frame.copy()
             return False, None
+
+    def set_mirror(self, enabled: bool):
+        self.mirror = enabled
 
     def switch_camera(self, new_index):
         with self.lock:
@@ -93,6 +150,9 @@ class CameraCapture:
                 except Exception:
                     pass
                 self.cap = None
+        self._fail_count = 0
+        self._backoff = 0.25
+        self._expected_size = None
         threading.Thread(target=self._init_camera, daemon=True).start()
 
     def release(self):

@@ -1500,7 +1500,8 @@ class ShieldFSLApp:
                     time.sleep(0.005)
                     continue
 
-                frame     = cv2.flip(frame, 1)
+                if cam_capture.mirror:
+                    frame = cv2.flip(frame, 1)
                 H_f, W_f  = frame.shape[:2]
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
