@@ -179,13 +179,28 @@ class NonFSLWindow:
         self._btn_send_rect    = (0, 0, 0, 0)
         self._btn_del_rect     = (0, 0, 0, 0)
         self._btn_clr_rect     = (0, 0, 0, 0)
+        # _hide_btn_rect/_show_main_btn_rect set by _pre_render_ui_shell
         self._palette_rects    = []  # [(key, item, x0, y0, x1, y1)]
         self._strip_item_rects = []  # [(idx, x0, y0, x1, y1)]
+
+        # Visibility / cross-window callbacks
+        self._visible = True
+        self.main_app = None
+        self.is_main_visible_fn = None
+        # hit-test rects are populated by _pre_render_ui_shell(); do not overwrite after shell build
+        if not hasattr(self, "_hide_btn_rect"):
+            self._hide_btn_rect = (0, 0, 0, 0)
+        if not hasattr(self, "_show_main_btn_rect"):
+            self._show_main_btn_rect = (0, 0, 0, 0)
 
         # Bind events
         self.window.bind("<Motion>",   self._on_motion)
         self.window.bind("<Button-1>", self._on_click)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Hover states
+        self._hide_hover = False
+        self._show_main_hover = False
 
         # Register with Co-Op Bus
         coop_hub.register_partner_listener(self._on_signer_message_received)
@@ -312,10 +327,31 @@ class NonFSLWindow:
         _draw_text(draw, switch_x + switch_w // 4 + 2, cy, "Partner", size=13, fill=WHITE, bold=True, anchor="mm")
         _draw_text(draw, switch_x + 3 * switch_w // 4, cy, "FSL Linked", size=13, fill="#5A718F", bold=False, anchor="mm")
 
-        # Right Online Badge Pill
+        # Right: window visibility + status badge
+        btn_w_vis = 110
+        btn_h_vis = 34
+        btn_gap = 10
         fps_w, fps_h = 160, 42
-        fps_x = bx + bw - fps_w - 28
+        right_edge = bx + bw - 20
+        fps_x = right_edge - fps_w
         fps_y = cy - fps_h // 2
+
+        hide_x = fps_x - btn_gap - btn_w_vis
+        hide_y = cy - btn_h_vis // 2
+        draw.rounded_rectangle([hide_x, hide_y, hide_x + btn_w_vis, hide_y + btn_h_vis],
+                               radius=btn_h_vis // 2, fill=hex2rgb("#FEE2E2"),
+                               outline=hex2rgb(RED_BORDER), width=1)
+        _draw_text(draw, hide_x + btn_w_vis // 2, cy, "Hide Partner", size=10, fill=RED_BTN, bold=True, anchor="mm")
+        self._hide_btn_rect = (hide_x, hide_y, hide_x + btn_w_vis, hide_y + btn_h_vis)
+
+        show_x = hide_x - btn_gap - btn_w_vis
+        show_y = hide_y
+        draw.rounded_rectangle([show_x, show_y, show_x + btn_w_vis, show_y + btn_h_vis],
+                               radius=btn_h_vis // 2, fill=hex2rgb("#E0F2FE"),
+                               outline=hex2rgb("#7DD3FC"), width=1)
+        _draw_text(draw, show_x + btn_w_vis // 2, cy, "Show Main", size=10, fill=BLUE_DARK, bold=True, anchor="mm")
+        self._show_main_btn_rect = (show_x, show_y, show_x + btn_w_vis, show_y + btn_h_vis)
+
         draw.rounded_rectangle([fps_x, fps_y, fps_x + fps_w, fps_y + fps_h],
                                radius=fps_h // 2, fill=hex2rgb("#F8FBFE"),
                                outline=hex2rgb("#DCE8F6"), width=1)
@@ -379,6 +415,8 @@ class NonFSLWindow:
     def _gui_loop(self):
         if not self._running:
             return
+        if not self._visible:
+            return
         t_start = time.time()
         try:
             self._render()
@@ -386,10 +424,34 @@ class NonFSLWindow:
             import traceback
             print(f"[Partner Render Error] {e}")
             traceback.print_exc()
+        if not self._running or not self._visible:
+            return
         elapsed_ms = int((time.time() - t_start) * 1000)
         target_ms = int(1000.0 / max(1.0, getattr(self, '_render_fps', 30.0)))
         delay = max(1, target_ms - elapsed_ms)  # self-throttled partner render cadence
         self.window.after(delay, self._gui_loop)
+
+    def _draw_topbar_hover(self, img, draw):
+        main_visible = self._main_is_visible()
+
+        # Hide Partner: hover => slightly bolder outline (no fill, text stays visible)
+        hx0, hy0, hx1, hy1 = getattr(self, "_hide_btn_rect", (0, 0, 0, 0))
+        if getattr(self, "_hide_hover", False) and (hx1 - hx0) > 0:
+            r = (hy1 - hy0) // 2
+            draw.rounded_rectangle([hx0, hy0, hx1, hy1], radius=r,
+                                   outline=hex2rgb("#DC2626"), width=2)
+
+        # Show Main: active (main visible) => light indicator; hover while hidden => bolder outline
+        sx0, sy0, sx1, sy1 = getattr(self, "_show_main_btn_rect", (0, 0, 0, 0))
+        show_hover = getattr(self, "_show_main_hover", False)
+        if (sx1 - sx0) > 0 and main_visible:
+            r = (sy1 - sy0) // 2
+            draw.rounded_rectangle([sx0, sy0, sx1, sy1], radius=r,
+                                   outline=hex2rgb("#CBD5E1"), width=1)
+        elif (sx1 - sx0) > 0 and show_hover and not main_visible:
+            r = (sy1 - sy0) // 2
+            draw.rounded_rectangle([sx0, sy0, sx1, sy1], radius=r,
+                                   outline=hex2rgb("#0284C7"), width=2)
 
     # ── Dynamic Master Render ──────────────────────────────────────────────────
     def _render(self):
@@ -408,6 +470,9 @@ class NonFSLWindow:
 
         # 4. Sign Palette Grid
         self._draw_sign_palette(img, draw, now)
+
+        # 4b. Top-bar hover overlay (buttons are in static shell)
+        self._draw_topbar_hover(img, draw)
 
         # 5. Toast Notification
         self._draw_notification(img, draw, now)
@@ -840,11 +905,33 @@ class NonFSLWindow:
                 break
         self._hovered_strip_idx = hov_strip
 
+        # Hover over top-bar visibility buttons
+        hx0, hy0, hx1, hy1 = getattr(self, "_hide_btn_rect", (0, 0, 0, 0))
+        sx0, sy0, sx1, sy1 = getattr(self, "_show_main_btn_rect", (0, 0, 0, 0))
+        self._hide_hover = (hx0 <= mx <= hx1 and hy0 <= my <= hy1)
+        self._show_main_hover = (sx0 <= mx <= sx1 and sy0 <= my <= sy1)
+        if (self._send_hover or self._del_hover or self._clr_hover or
+                self._hovered_palette_key is not None or self._hovered_strip_idx is not None or
+                self._hide_hover or self._show_main_hover):
+            self.window.configure(cursor="hand2")
+        else:
+            self.window.configure(cursor="")
+
     def _on_click(self, event):
         if not hasattr(self, 'ui_scale') or self.ui_scale <= 0:
             return
         mx = int((event.x - self.ui_ox) / self.ui_scale)
         my = int((event.y - self.ui_oy) / self.ui_scale)
+
+        # 0. Window visibility buttons (top bar)
+        x0, y0, x1, y1 = getattr(self, "_hide_btn_rect", (0, 0, 0, 0))
+        if x0 <= mx <= x1 and y0 <= my <= y1:
+            self.hide_self()
+            return
+        x0, y0, x1, y1 = getattr(self, "_show_main_btn_rect", (0, 0, 0, 0))
+        if x0 <= mx <= x1 and y0 <= my <= y1:
+            self.show_main()
+            return
 
         # 1. SEND Button Click
         x0, y0, x1, y1 = self._btn_send_rect
@@ -930,11 +1017,61 @@ class NonFSLWindow:
         except Exception:
             pass
 
+    # ── Window visibility / idle helpers ─────────────────────────────────────
+    def is_window_visible(self):
+        return bool(getattr(self, "_visible", True))
+
+    def _main_is_visible(self):
+        fn = getattr(self, "is_main_visible_fn", None)
+        if callable(fn):
+            return bool(fn())
+        app = getattr(self, "main_app", None)
+        if app is not None and hasattr(app, "is_window_visible"):
+            return bool(app.is_window_visible())
+        return True
+
+    def hide_self(self):
+        if not self._visible:
+            return
+        if not self._main_is_visible():
+            self._set_notification("Keep one window visible")
+            print("[Partner] hide refused: main not visible")
+            return
+        self._visible = False
+        try:
+            self.window.withdraw()
+            print("[Partner] hidden")
+        except Exception as e:
+            print(f"[Partner] hide error: {e}")
+
+    def show_self(self):
+        self._visible = True
+        try:
+            self.window.deiconify()
+            self.window.lift()
+        except Exception as e:
+            print(f"[Partner] show error: {e}")
+        if self._running:
+            self.window.after(1, self._gui_loop)
+        print("[Partner] shown")
+
+    def show_main(self):
+        app = getattr(self, "main_app", None)
+        print(f"[Partner] show_main click, main_app={app is not None}")
+        if app and hasattr(app, "show_self"):
+            app.show_self()
+        else:
+            self._set_notification("Main window unavailable")
+
     def _on_close(self):
         self._running = False
+        self._visible = False
         if self.on_close_callback:
             self.on_close_callback()
-        self.window.destroy()
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

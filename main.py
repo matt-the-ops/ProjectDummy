@@ -923,6 +923,10 @@ class ShieldFSLApp:
         self.toast_bg_id   = self.canvas.create_polygon(0, 0, 0, 0, fill=BLUE_PRIMARY, outline="", state="hidden")
         self.toast_text_id = self.canvas.create_text(0, 0, text="", font=("Segoe UI", 15, "bold"), fill=WHITE, anchor="center", state="hidden")
 
+        # 8. Top-bar window visibility button state outlines (subtle, keep text visible)
+        self.hide_btn_overlay_id = self.canvas.create_polygon(0, 0, 0, 0, fill="", outline="#DC2626", width=2, state="hidden")
+        self.show_partner_btn_overlay_id = self.canvas.create_polygon(0, 0, 0, 0, fill="", outline="#0284C7", width=2, state="hidden")
+
         # Hit-test rects for the 3 functional camera control buttons, keyed by name
         self._cam_btn_rects = {}
 
@@ -953,6 +957,8 @@ class ShieldFSLApp:
         self._spk_click_until  = 0.0     # time.time() deadline for click-flash
         self._send_hover       = False   # True while cursor is over send button
         self._send_click_until = 0.0     # time.time() deadline for click-flash
+        self._hide_hover       = False
+        self._show_partner_hover = False
 
         # Co-Op 2-Way Partner state
         self.partner_window   = None
@@ -979,6 +985,15 @@ class ShieldFSLApp:
         self._logo_w        = 50
         self._logo_h        = 50
         self._load_logo()
+
+        # Visibility / idle state (per-window hide/show)
+        self._visible = True
+        self._ml_paused = False
+        # hit-test rects are populated by _pre_render_ui_shell(); do not overwrite after shell build
+        if not hasattr(self, "_hide_btn_rect"):
+            self._hide_btn_rect = (0, 0, 0, 0)
+        if not hasattr(self, "_show_partner_btn_rect"):
+            self._show_partner_btn_rect = (0, 0, 0, 0)
 
         # Key and Mouse bindings
         root.bind("<KeyPress>",  self._on_key)
@@ -1047,6 +1062,62 @@ class ShieldFSLApp:
             if self._cam_pil is not None:
                 return self._cam_pil.copy()
         return None
+
+    # ── Window visibility / idle helpers ─────────────────
+    def is_window_visible(self):
+        return bool(getattr(self, "_visible", True))
+
+    def _partner_is_visible(self):
+        pw = getattr(self, "partner_window", None)
+        if pw is None:
+            return True
+        fn = getattr(pw, "is_window_visible", None)
+        return bool(fn()) if callable(fn) else True
+
+    def hide_self(self):
+        if not self._visible:
+            return
+        if not self._partner_is_visible():
+            set_notification("Keep one window visible")
+            print("[Main] hide refused: partner not visible")
+            return
+        try:
+            self._was_zoomed = (self.root.state() == "zoomed")
+        except Exception:
+            self._was_zoomed = False
+        self._visible = False
+        self._ml_paused = True
+        try:
+            self.root.withdraw()
+            print("[Main] hidden")
+        except Exception as e:
+            print(f"[Main] hide error: {e}")
+
+    def show_self(self):
+        self._visible = True
+        self._ml_paused = False
+        try:
+            self.root.deiconify()
+            if getattr(self, "_was_zoomed", False):
+                try:
+                    self.root.state("zoomed")
+                except Exception:
+                    pass
+            self.root.lift()
+            self.root.focus_force()
+        except Exception as e:
+            print(f"[Main] show error: {e}")
+        if self._running:
+            self.root.after(1, self._gui_loop)
+        print("[Main] shown")
+
+    def show_partner(self):
+        pw = getattr(self, "partner_window", None)
+        print(f"[Main] show_partner click, partner_window={pw is not None}")
+        if pw and hasattr(pw, "show_self"):
+            pw.show_self()
+        else:
+            set_notification("Partner window unavailable")
 
     # ── Logo loader ──────────────────────────────────────
     def _load_logo(self):
@@ -1249,6 +1320,15 @@ class ShieldFSLApp:
         self._spk_hover = (spk_x <= mx <= spk_x + btn_w and row_y <= my <= row_y + row_h)
         self._send_hover = (send_x <= mx <= send_x + btn_w and row_y <= my <= row_y + row_h)
 
+        hx0, hy0, hx1, hy1 = getattr(self, "_hide_btn_rect", (0, 0, 0, 0))
+        sx0, sy0, sx1, sy1 = getattr(self, "_show_partner_btn_rect", (0, 0, 0, 0))
+        self._hide_hover = (hx0 <= mx <= hx1 and hy0 <= my <= hy1)
+        self._show_partner_hover = (sx0 <= mx <= sx1 and sy0 <= my <= sy1)
+        if self._spk_hover or self._send_hover or self._hide_hover or self._show_partner_hover:
+            self.root.configure(cursor="hand2")
+        else:
+            self.root.configure(cursor="")
+
     # ── Mouse click handler ──────────────────────────────
     def _on_click(self, event):
         global current_mode, typed_output, camera_hidden
@@ -1327,6 +1407,51 @@ class ShieldFSLApp:
         elif send_x - 5 <= mx <= send_x + btn_w + 5 and row_y - 5 <= my <= row_y + row_h + 5:
             self._send_click_until = time.time() + 0.18  # 180 ms click-flash
             self._send_fsl_output()
+            return
+
+        # Window visibility buttons (top bar)
+        hx0, hy0, hx1, hy1 = self._hide_btn_rect
+        if hx0 <= mx <= hx1 and hy0 <= my <= hy1:
+            self.hide_self()
+            return
+        sx0, sy0, sx1, sy1 = self._show_partner_btn_rect
+        if sx0 <= mx <= sx1 and sy0 <= my <= sy1:
+            self.show_partner()
+            return
+
+    def _update_topbar_hover_overlays(self):
+        s = self.ui_scale
+        ox, oy = self.ui_ox, self.ui_oy
+        partner_visible = self._partner_is_visible()
+
+        # Hide Main: hover => slightly bolder outline (no fill, text stays visible)
+        hx0, hy0, hx1, hy1 = getattr(self, "_hide_btn_rect", (0, 0, 0, 0))
+        if getattr(self, "_hide_hover", False) and (hx1 - hx0) > 0:
+            sx0, sy0 = ox + int(hx0 * s), oy + int(hy0 * s)
+            sx1, sy1 = ox + int(hx1 * s), oy + int(hy1 * s)
+            r = max(1, (sy1 - sy0) // 2)
+            self.canvas.coords(self.hide_btn_overlay_id, *_round_rect_pts(sx0, sy0, sx1, sy1, r))
+            self.canvas.itemconfig(self.hide_btn_overlay_id, outline="#DC2626", width=2, state="normal")
+        else:
+            self.canvas.itemconfig(self.hide_btn_overlay_id, state="hidden")
+
+        # Show Partner: active (partner visible) => light indicator; hover while hidden => bolder outline
+        sx0r, sy0r, sx1r, sy1r = getattr(self, "_show_partner_btn_rect", (0, 0, 0, 0))
+        show_hover = getattr(self, "_show_partner_hover", False)
+        if (sx1r - sx0r) > 0 and partner_visible:
+            cx0, cy0 = ox + int(sx0r * s), oy + int(sy0r * s)
+            cx1, cy1 = ox + int(sx1r * s), oy + int(sy1r * s)
+            r = max(1, (cy1 - cy0) // 2)
+            self.canvas.coords(self.show_partner_btn_overlay_id, *_round_rect_pts(cx0, cy0, cx1, cy1, r))
+            self.canvas.itemconfig(self.show_partner_btn_overlay_id, outline="#CBD5E1", width=1, state="normal")
+        elif (sx1r - sx0r) > 0 and show_hover and not partner_visible:
+            cx0, cy0 = ox + int(sx0r * s), oy + int(sy0r * s)
+            cx1, cy1 = ox + int(sx1r * s), oy + int(sy1r * s)
+            r = max(1, (cy1 - cy0) // 2)
+            self.canvas.coords(self.show_partner_btn_overlay_id, *_round_rect_pts(cx0, cy0, cx1, cy1, r))
+            self.canvas.itemconfig(self.show_partner_btn_overlay_id, outline="#0284C7", width=2, state="normal")
+        else:
+            self.canvas.itemconfig(self.show_partner_btn_overlay_id, state="hidden")
 
     # ── ML / camera processing thread ────────────────────
     def _ml_loop(self):
@@ -1366,6 +1491,10 @@ class ShieldFSLApp:
 
             while self._running:
                 _iter_start = time.time()
+                if self._ml_paused:
+                    prev_results = None
+                    time.sleep(0.1)
+                    continue
                 ret, frame = cam_capture.read()
                 if not ret or frame is None:
                     time.sleep(0.005)
@@ -1782,6 +1911,8 @@ class ShieldFSLApp:
     def _gui_loop(self):
         if not self._running:
             return
+        if not self._visible:
+            return
         t_start = time.time()
         try:
             self._render()
@@ -1789,6 +1920,8 @@ class ShieldFSLApp:
             # so it no longer consumes this window's frame budget.
         except Exception as e:
             print(f"[Render Error] {e}")
+        if not self._running or not self._visible:
+            return
         elapsed_ms = int((time.time() - t_start) * 1000)
         delay = max(1, 33 - elapsed_ms)          # ~30 FPS target (leaves CPU headroom)
         self.root.after(delay, self._gui_loop)
@@ -1846,10 +1979,31 @@ class ShieldFSLApp:
         _draw_text(draw, switch_x + switch_w // 4, cy, "Letters", size=13, fill="#5A718F", bold=False, anchor="mm")
         _draw_text(draw, switch_x + 3 * switch_w // 4, cy, "Words", size=13, fill="#5A718F", bold=False, anchor="mm")
 
-        # Right: FPS Counter Pill Badge Outline
+        # Right: window visibility + FPS Counter Pill Badge Outline
+        btn_w_vis = 110
+        btn_h_vis = 34
+        btn_gap = 10
         fps_w, fps_h = 120, 42
-        fps_x = bx + bw - fps_w - 28
+        right_edge = bx + bw - 20
+        fps_x = right_edge - fps_w
         fps_y = cy - fps_h // 2
+
+        show_x = fps_x - btn_gap - btn_w_vis
+        show_y = cy - btn_h_vis // 2
+        draw.rounded_rectangle([show_x, show_y, show_x + btn_w_vis, show_y + btn_h_vis],
+                               radius=btn_h_vis // 2, fill=hex2rgb("#E0F2FE"),
+                               outline=hex2rgb("#7DD3FC"), width=1)
+        _draw_text(draw, show_x + btn_w_vis // 2, cy, "Show Partner", size=10, fill=BLUE_DARK, bold=True, anchor="mm")
+        self._show_partner_btn_rect = (show_x, show_y, show_x + btn_w_vis, show_y + btn_h_vis)
+
+        hide_x = show_x - btn_gap - btn_w_vis
+        hide_y = show_y
+        draw.rounded_rectangle([hide_x, hide_y, hide_x + btn_w_vis, hide_y + btn_h_vis],
+                               radius=btn_h_vis // 2, fill=hex2rgb("#FEE2E2"),
+                               outline=hex2rgb(RED_BORDER), width=1)
+        _draw_text(draw, hide_x + btn_w_vis // 2, cy, "Hide Main", size=10, fill=RED_BTN, bold=True, anchor="mm")
+        self._hide_btn_rect = (hide_x, hide_y, hide_x + btn_w_vis, hide_y + btn_h_vis)
+
         draw.rounded_rectangle([fps_x, fps_y, fps_x + fps_w, fps_y + fps_h],
                                radius=fps_h // 2, fill=hex2rgb("#F8FBFE"),
                                outline=hex2rgb("#DCE8F6"), width=1)
@@ -1998,6 +2152,9 @@ class ShieldFSLApp:
 
         display_fps = self.gui_fps if hasattr(self, 'gui_fps') and self.gui_fps > 0 else fps_value
         self.canvas.itemconfig(self.fps_txt_id, text=f"{display_fps:.0f} FPS")
+
+        # 1b. Top-bar visibility button hover overlays
+        self._update_topbar_hover_overlays()
 
         # 2. Dynamic Slider Knob
         cy_top = self.TOP_Y + self.TOP_H // 2
@@ -2521,9 +2678,13 @@ def main():
     # Launch Non-FSL Partner Window in the same process with live camera access
     partner_app = NonFSLWindow(master=root, get_cam_fn=app.get_cam_frame)
     app.partner_window = partner_app
+    partner_app.main_app = app
+    partner_app.is_main_visible_fn = app.is_window_visible
 
     def _on_close():
         try:
+            partner_app._running = False
+            partner_app._visible = False
             partner_app.window.destroy()
         except Exception:
             pass
