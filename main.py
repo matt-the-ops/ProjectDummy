@@ -3,7 +3,17 @@ SHIELD FSL — Neumorphism Tkinter GUI (Revamped)
 Single 1920×1080 window, matching the SHIELD FSL reference design.
 """
 
+import warnings
+
+# Hide the repeating protobuf deprecation warning (harmless)
+warnings.filterwarnings(
+    action="ignore",
+    category=UserWarning,
+    module="google.protobuf.symbol_database",
+)
+
 import os
+PERF_PROFILE = os.environ.get("PERF_PROFILE", "normal").lower()
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import sys
 import ctypes
@@ -39,6 +49,14 @@ except ModuleNotFoundError:
     import mediapipe as mp
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
+
+def lower_ml_thread_priority():
+    """Windows only: make the ML thread yield to the GUI thread."""
+    try:
+        k32 = ctypes.windll.kernel32
+        k32.SetThreadPriority(k32.GetCurrentThread(), -1)  # BELOW_NORMAL
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────
 #  TTS — BMO Voice
@@ -991,6 +1009,7 @@ class CameraCapture:
         self.running = False
         self.lock = threading.Lock()
         self.latest_frame = None
+        self.frame_id = 0
         self.fps_tracker = collections.deque(maxlen=30)
         self.cam_fps = 0.0
         self.thread = None
@@ -1048,6 +1067,15 @@ class CameraCapture:
 
             with self.lock:
                 self.latest_frame = frame
+                self.frame_id += 1
+
+    def read_latest(self, last_id=-1):
+        """Return the newest frame without copying it, unless it was already read."""
+        with self.lock:
+            fid = self.frame_id
+            if self.latest_frame is None or fid == last_id:
+                return fid, None
+            return fid, self.latest_frame
 
     def read(self):
         with self.lock:
@@ -1613,6 +1641,7 @@ class ShieldFSLApp:
 
     # ── ML / camera processing thread ────────────────────
     def _ml_loop(self):
+        lower_ml_thread_priority()
         global current_frame_prediction, typed_output, tts_is_speaking
         global last_predicted_word, last_word_time, prediction_buffer
         global pinky_history, index_history, last_stable_char, stable_start_time
@@ -1999,13 +2028,6 @@ class ShieldFSLApp:
         t_start = time.time()
         try:
             self._render()
-            if self.partner_window and getattr(self.partner_window, '_running', False):
-                # Throttle partner window: update every ~100ms (10 FPS) to free up primary window
-                now = time.time()
-                last_p_render = getattr(self.partner_window, '_last_render_t', 0.0)
-                if now - last_p_render >= 0.10:
-                    self.partner_window._render()
-                    self.partner_window._last_render_t = now
         except Exception as e:
             print(f"[Render Error] {e}")
         elapsed_ms = int((time.time() - t_start) * 1000)
@@ -2755,7 +2777,13 @@ def main():
     app  = ShieldFSLApp(root)
 
     # Launch Non-FSL Partner Window in the same process with live camera access
-    partner_app = NonFSLWindow(master=root, get_cam_fn=app.get_cam_frame)
+    partner_app = NonFSLWindow(
+        master=root,
+        get_cam_fn=app.get_cam_frame,
+        get_raw_frame_fn=cam_capture.read_latest,
+        speak_fn=speak_text,
+        ping_fn=play_ping_sound,
+    )
     app.partner_window = partner_app
 
     def _on_close():

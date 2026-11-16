@@ -6,7 +6,7 @@
     "ml_w": 320,
     "ml_h": 240,
     "target_fps": 60,
-    "partner_fps": 10,
+    "partner_fps": 30,
     "camera_index": 0,
     "screen_resolution": "720p",
     "keybinds": {

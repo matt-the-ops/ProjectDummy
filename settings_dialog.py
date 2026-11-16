@@ -323,8 +323,8 @@ class SettingsDialog(tk.Toplevel):
         row_d = tk.Frame(opt_box, bg="#0B132B")
         row_d.pack(fill=tk.X, padx=14, pady=8)
         tk.Label(row_d, text="Partner Kiosk FPS Cap:", font=("Segoe UI", 10, "bold"), fg="#E2E8F0", bg="#0B132B", width=25, anchor="w").pack(side=tk.LEFT)
-        self.kiosk_var = tk.IntVar(value=settings.get("partner_fps", 10))
-        for val, txt in [(5, "5 FPS (Eco Mode)"), (10, "10 FPS (Normal)"), (20, "20 FPS (Smooth)")]:
+        self.kiosk_var = tk.IntVar(value=settings.get("partner_fps", 30))
+        for val, txt in [(15, "15 FPS (Eco Mode)"), (20, "20 FPS (Low CPU)"), (30, "30 FPS (Smooth)")]:
             rb = tk.Radiobutton(row_d, text=txt, value=val, variable=self.kiosk_var, font=("Segoe UI", 9),
                                 fg="#93C5FD", bg="#0B132B", activebackground="#0B132B", activeforeground="#FFFFFF",
                                 selectcolor="#1E293B", command=self._update_granular)
@@ -419,7 +419,7 @@ class SettingsDialog(tk.Toplevel):
 
         self.mesh_var.set(settings.get("face_mesh_mode", "calibrate_only"))
         self.fps_var.set(settings.get("target_fps", 60))
-        self.kiosk_var.set(settings.get("partner_fps", 10))
+        self.kiosk_var.set(settings.get("partner_fps", 30))
 
     # ── Keybinds Customization Tab ──────────────────────────────────
     def _build_keys_tab(self):

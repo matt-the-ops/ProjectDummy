@@ -31,7 +31,7 @@ DEFAULT_SETTINGS = {
     "ml_w": 480,                     # ML input width (sharp hand & face capture)
     "ml_h": 360,                     # ML input height
     "target_fps": 60,                # Target GUI refresh rate (30, 60)
-    "partner_fps": 10,               # Partner window refresh rate (5, 10, 20)
+    "partner_fps": 30,               # Partner window refresh rate (15, 20, 30)
     "camera_index": 0,               # Active camera device index
     "screen_resolution": "auto",     # "720p", "900p", "1080p", "fullscreen", "auto"
     
@@ -75,7 +75,7 @@ PRESETS = {
         "ml_w": 360,
         "ml_h": 270,
         "target_fps": 30,
-        "partner_fps": 5,
+        "partner_fps": 20,
     },
     "balanced": {
         "performance_mode": False,
@@ -85,7 +85,7 @@ PRESETS = {
         "ml_w": 480,
         "ml_h": 360,
         "target_fps": 60,
-        "partner_fps": 10,
+        "partner_fps": 30,
     },
     "quality": {
         "performance_mode": False,
@@ -95,7 +95,7 @@ PRESETS = {
         "ml_w": 640,
         "ml_h": 480,
         "target_fps": 60,
-        "partner_fps": 20,
+        "partner_fps": 30,
     }
 }
 
