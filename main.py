@@ -1241,6 +1241,17 @@ class ShieldFSLApp:
         self._cam_btn_rects = {}
         self._cam_hover = None
 
+        # ── Load Logo ──
+        self._logo_rgba     = None
+        self._logo_alpha    = None
+        self._logo_rim      = None
+        self._logo_rim_mask = None
+        self._logo_shadow   = None
+        self._logo_pad      = 20
+        self._logo_w        = 50
+        self._logo_h        = 50
+        self._load_logo()
+
         # UI Shell Cache: Pre-render static elements
         self.ui_shell_cache = self._pre_render_ui_shell()
         self._update_layout_geometry()
@@ -1280,17 +1291,6 @@ class ShieldFSLApp:
         # Cached BMO ImageTk
         self._bmo_idle_tk = None
         self._bmo_talk_tk = None
-
-        # ── Load Logo ──
-        self._logo_rgba     = None
-        self._logo_alpha    = None
-        self._logo_rim      = None
-        self._logo_rim_mask = None
-        self._logo_shadow   = None
-        self._logo_pad      = 20
-        self._logo_w        = 50
-        self._logo_h        = 50
-        self._load_logo()
 
         # Key and Mouse bindings
         root.bind("<KeyPress>",  self._on_key)
@@ -2057,6 +2057,15 @@ class ShieldFSLApp:
         glow = glow.filter(ImageFilter.GaussianBlur(12))
         shell.paste(glow, (logo_x, cy - 36), glow)
 
+        if self._logo_rgba is not None:
+            logo_draw_x = logo_x + (72 - self._logo_w) // 2
+            logo_draw_y = cy - self._logo_h // 2
+            shadow_x = logo_draw_x - self._logo_pad
+            shadow_y = logo_draw_y - self._logo_pad
+            shell.paste(self._logo_shadow, (shadow_x, shadow_y), self._logo_shadow)
+            shell.paste(self._logo_rim, (logo_draw_x, logo_draw_y), self._logo_rim_mask)
+            shell.paste(self._logo_rgba, (logo_draw_x, logo_draw_y), self._logo_alpha)
+
         title_x = logo_x + 80
         f_title = _get_font(25, bold=True)
         draw.text((title_x, cy - 12), "Project ", font=f_title, fill=hex2rgb(TEXT_MAIN), anchor="lm")
@@ -2450,14 +2459,20 @@ class ShieldFSLApp:
             self._cached_hud_overlay = hud
             self._cached_hud_key = hud_key
 
-        # Composite: paste HUD overlay onto camera frame
-        cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
-
-        # Scale cam_crop to match ui_scale for canvas
+        # Scale video fast (NEAREST), scale HUD sharp (LANCZOS, cached)
         scaled_w = max(1, int(new_w * self.ui_scale))
         scaled_h = max(1, int(new_h * self.ui_scale))
         if scaled_w != new_w or scaled_h != new_h:
             cam_crop = cam_crop.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+            hkey = (self._cached_hud_key, scaled_w, scaled_h)
+            if getattr(self, "_hud_scaled_key", None) != hkey:
+                self._hud_scaled = self._cached_hud_overlay.resize(
+                    (scaled_w, scaled_h), Image.Resampling.LANCZOS)
+                self._hud_scaled_key = hkey
+            hud_img = self._hud_scaled
+        else:
+            hud_img = self._cached_hud_overlay
+        cam_crop.paste(hud_img, (0, 0), hud_img)
 
         self.cam_tk = ImageTk.PhotoImage(cam_crop)
         self.canvas.itemconfig(self.cam_image_id, image=self.cam_tk)
@@ -2469,7 +2484,7 @@ class ShieldFSLApp:
         dock_y = new_h - dock_h - 22
 
         draw.rounded_rectangle([dock_x, dock_y, dock_x + dock_w, dock_y + dock_h], radius=dock_h // 2,
-                               fill=(20, 35, 60, 205), outline=hex2rgb("#3B82F6"), width=1)
+                               fill=(20, 35, 60, 225), outline=hex2rgb("#3B82F6"), width=2)
 
         self._cam_btn_rects = {}
         centers = {}
@@ -2493,20 +2508,22 @@ class ShieldFSLApp:
             b_fill = "#2563EB" if is_active else ("#334155" if hov_b else "#1E293B")
             draw.ellipse([bx - btn_r, by - btn_r, bx + btn_r, by + btn_r],
                          fill=hex2rgb(b_fill),
-                         outline=hex2rgb("#93C5FD" if hov_b else ("#60A5FA" if is_active else "#475569")),
-                         width=2 if hov_b else 1)
+                         outline=hex2rgb("#93C5FD" if hov_b else ("#60A5FA" if is_active else "#64748B")),
+                         width=3)
+            IW = 3  # one stroke width for every icon
+            WH = hex2rgb(WHITE)
 
             if b_type == "cam":
-                draw.rounded_rectangle([bx - 8, by - 5, bx + 8, by + 5], radius=2, outline=hex2rgb(WHITE), width=2)
-                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], outline=hex2rgb(WHITE), width=2)
+                draw.rounded_rectangle([bx - 9, by - 6, bx + 9, by + 6], radius=3, outline=WH, width=IW)
+                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], outline=WH, width=IW)
             elif b_type == "eye":
-                draw.ellipse([bx - 9, by - 6, bx + 9, by + 6], outline=hex2rgb(WHITE), width=2)
-                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], fill=hex2rgb(WHITE))
+                draw.ellipse([bx - 10, by - 7, bx + 10, by + 7], outline=WH, width=IW)
+                draw.ellipse([bx - 3, by - 3, bx + 3, by + 3], fill=WH)
                 if camera_hidden:
-                    draw.line([(bx - 8, by - 7), (bx + 8, by + 7)], fill=hex2rgb("#EF4444"), width=2)
+                    draw.line([(bx - 9, by - 9), (bx + 9, by + 9)], fill=hex2rgb("#EF4444"), width=IW)
             elif b_type == "shield":
-                draw.polygon([(bx - 8, by - 7), (bx + 8, by - 7), (bx + 8, by + 3), (bx, by + 9), (bx - 8, by + 3)],
-                             outline=hex2rgb(WHITE), width=2)
+                pts = [(bx - 8, by - 8), (bx + 8, by - 8), (bx + 8, by + 3), (bx, by + 10), (bx - 8, by + 3)]
+                draw.line(pts + [pts[0]], fill=WH, width=IW, joint="curve")
 
         # Hover tooltip above the dock
         hov = self._cam_hover
@@ -2531,7 +2548,7 @@ class ShieldFSLApp:
         rx, ry, rw, rh = self.RIGHT_X, self.CONTENT_Y, self.RIGHT_W, self.CONTENT_H
         bmo_h = 114
 
-        r_img = Image.new("RGBA", (rw, rh), (255, 255, 255, 0))
+        r_img = self.ui_shell_cache.crop((rx, ry, rx + rw, ry + rh)).convert("RGBA")
         draw = ImageDraw.Draw(r_img)
 
         # ── 1. Top Card: BMO Companion Header ──
@@ -2572,7 +2589,7 @@ class ShieldFSLApp:
             "Partner sent you a message!" if (self.received_message and (now - self.received_message.get("time", 0)) < 15.0)
             else "Listening for your signs..."
         )
-        _draw_text(draw, tx, fc_cy + 14, sub_text, size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
+        _draw_text(draw, tx, fc_cy + 14, sub_text, size=14, fill=TEXT_MUTED, bold=True, anchor="lm")
 
         # Audio Waveform Equalizer
         eq_x = rw - 70
@@ -2663,7 +2680,7 @@ class ShieldFSLApp:
         scaled_w = max(1, int(rw * self.ui_scale))
         scaled_h = max(1, int(rh * self.ui_scale))
         if scaled_w != rw or scaled_h != rh:
-            r_img = r_img.resize((scaled_w, scaled_h), Image.Resampling.NEAREST)
+            r_img = r_img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
         self.right_tk = ImageTk.PhotoImage(r_img)
         self.canvas.itemconfig(self.right_image_id, image=self.right_tk)
