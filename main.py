@@ -1214,9 +1214,9 @@ class ShieldFSLApp:
         self.right_image_id = self.canvas.create_image(0, 0, anchor=tk.NW)
 
         # 4. Top bar dynamic items: Mode slider knob & labels + FPS chip
-        self.slider_knob_id = self.canvas.create_polygon(0, 0, 0, 0, 0, 0, fill="#2563EB", outline="#60A5FA", width=1)
-        self.lbl_letters_id = self.canvas.create_text(0, 0, text="Letters", font=("Segoe UI", 12, "bold"), fill=WHITE, anchor="center")
-        self.lbl_words_id   = self.canvas.create_text(0, 0, text="Words", font=("Segoe UI", 12), fill="#5A718F", anchor="center")
+        self.switch_id      = self.canvas.create_image(0, 0, anchor=tk.NW)
+        self._switch_tk     = None
+        self._switch_key    = None
         self.fps_txt_id     = self.canvas.create_text(0, 0, text="60 FPS", font=("Segoe UI", 13, "bold"), fill=TEXT_MAIN, anchor="w")
 
         # 5. Stats row items (4 metric values + RMS progress bar)
@@ -1239,6 +1239,7 @@ class ShieldFSLApp:
 
         # Hit-test rects for the 3 functional camera control buttons, keyed by name
         self._cam_btn_rects = {}
+        self._cam_hover = None
 
         # UI Shell Cache: Pre-render static elements
         self.ui_shell_cache = self._pre_render_ui_shell()
@@ -1440,12 +1441,7 @@ class ShieldFSLApp:
         self.canvas.coords(self.fps_txt_id, ox + int((fps_x + 32) * s), oy + int(cy * s))
         self.canvas.itemconfig(self.fps_txt_id, font=_get_tk_font(int(13 * s), bold=True))
 
-        switch_w, switch_h = 210, 48
-        switch_x = W // 2 - switch_w // 2
-        self.canvas.coords(self.lbl_letters_id, ox + int((switch_x + switch_w // 4) * s), oy + int(cy * s))
-        self.canvas.coords(self.lbl_words_id, ox + int((switch_x + 3 * switch_w // 4) * s), oy + int(cy * s))
-        self.canvas.itemconfig(self.lbl_letters_id, font=_get_tk_font(int(12 * s), bold=True))
-        self.canvas.itemconfig(self.lbl_words_id, font=_get_tk_font(int(12 * s), bold=True))
+        self._switch_key = None   # force mode switch re-render at the new scale
 
         # Stats Row Items
         mx, my, mw, mh = self.PAD, self.METRICS_Y, W - self.PAD * 2, self.METRICS_H
@@ -1559,6 +1555,12 @@ class ShieldFSLApp:
         spk_x = send_x - btn_w - gap
         self._spk_hover = (spk_x <= mx <= spk_x + btn_w and row_y <= my <= row_y + row_h)
         self._send_hover = (send_x <= mx <= send_x + btn_w and row_y <= my <= row_y + row_h)
+        hov = None
+        for key, (x0, y0, x1, y1) in self._cam_btn_rects.items():
+            if x0 <= mx <= x1 and y0 <= my <= y1:
+                hov = key
+                break
+        self._cam_hover = hov
 
     # ── Mouse click handler ──────────────────────────────
     def _on_click(self, event):
@@ -2077,15 +2079,7 @@ class ShieldFSLApp:
         # Subtitle
         _draw_text(draw, title_x, cy + 16, "Filipino Sign Language Neural Core v2.4", size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
 
-        # Center: Inset Mode Slider Track
-        switch_w, switch_h = 210, 48
-        switch_x = W // 2 - switch_w // 2
-        switch_y = cy - switch_h // 2
-        draw.rounded_rectangle([switch_x, switch_y, switch_x + switch_w, switch_y + switch_h],
-                               radius=switch_h // 2, fill=hex2rgb("#DDEBF9"),
-                               outline=hex2rgb("#CBDDF2"), width=1)
-        _draw_text(draw, switch_x + switch_w // 4, cy, "Letters", size=13, fill="#5A718F", bold=False, anchor="mm")
-        _draw_text(draw, switch_x + 3 * switch_w // 4, cy, "Words", size=13, fill="#5A718F", bold=False, anchor="mm")
+        # (Mode switch is a dynamic layer: see _update_mode_switch)
 
         # Right: FPS Counter Pill Badge Outline
         fps_w, fps_h = 120, 42
@@ -2226,6 +2220,35 @@ class ShieldFSLApp:
 
         return shell
 
+    def _update_mode_switch(self):
+        key = (current_mode, self.ui_scale)
+        if key == self._switch_key:
+            return
+        self._switch_key = key
+        s, SS = self.ui_scale, 4                      # SS = supersample for smooth edges
+        sw, sh = max(2, int(210 * s)), max(2, int(48 * s))
+        k = s * SS
+        big = Image.new("RGBA", (int(210 * k), int(48 * k)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(big)
+        d.rounded_rectangle([0, 0, big.width - 1, big.height - 1], radius=big.height // 2,
+                            fill=hex2rgb("#DDEBF9"), outline=hex2rgb("#CBDDF2"), width=SS)
+        kx = 4 if current_mode == 1 else 105
+        d.rounded_rectangle([int(kx * k), int(4 * k), int((kx + 101) * k), int(44 * k)],
+                            radius=int(20 * k), fill=hex2rgb("#2563EB"),
+                            outline=hex2rgb("#60A5FA"), width=SS)
+        img = big.resize((sw, sh), Image.Resampling.LANCZOS)
+        d = ImageDraw.Draw(img)
+        fs = max(8, int(13 * s))
+        for cx, label, mode in ((54.5, "Letters", 1), (155.5, "Words", 2)):
+            on = current_mode == mode
+            _draw_text(d, int(cx * s), sh // 2, label, size=fs,
+                       fill=WHITE if on else "#5A718F", bold=on, anchor="mm")
+        self._switch_tk = ImageTk.PhotoImage(img)
+        self.canvas.itemconfig(self.switch_id, image=self._switch_tk)
+        self.canvas.coords(self.switch_id,
+                           self.ui_ox + int((self.W // 2 - 105) * s),
+                           self.ui_oy + int((self.TOP_Y + self.TOP_H // 2 - 24) * s))
+
     def _render(self):
         now  = time.time()
         W, H = self.W, self.H
@@ -2240,25 +2263,8 @@ class ShieldFSLApp:
         display_fps = self.gui_fps if hasattr(self, 'gui_fps') and self.gui_fps > 0 else fps_value
         self.canvas.itemconfig(self.fps_txt_id, text=f"{display_fps:.0f} FPS")
 
-        # 2. Dynamic Slider Knob
-        cy_top = self.TOP_Y + self.TOP_H // 2
-        switch_w, switch_h = 210, 48
-        switch_x = W // 2 - switch_w // 2
-        switch_y = cy_top - switch_h // 2
-        knob_pad = 4
-        knob_w = switch_w // 2 - knob_pad
-        knob_h = switch_h - knob_pad * 2
-        knob_y = switch_y + knob_pad
-        knob_x = switch_x + knob_pad if current_mode == 1 else switch_x + switch_w // 2
-
-        kx0 = ox + int(knob_x * s)
-        ky0 = oy + int(knob_y * s)
-        kx1 = kx0 + int(knob_w * s)
-        ky1 = ky0 + int(knob_h * s)
-        kr  = int(knob_h * s) // 2
-        self.canvas.coords(self.slider_knob_id, *_round_rect_pts(kx0, ky0, kx1, ky1, kr))
-        self.canvas.itemconfig(self.lbl_letters_id, fill=WHITE if current_mode == 1 else "#5A718F")
-        self.canvas.itemconfig(self.lbl_words_id, fill=WHITE if current_mode == 2 else "#5A718F")
+        # 2. Mode switch (re-renders only when mode / scale changes)
+        self._update_mode_switch()
 
         # 3. Update Camera Viewport Sub-image
         self._draw_left_panel(now)
@@ -2399,7 +2405,7 @@ class ShieldFSLApp:
         # ── Overlay HUD (cached unless state changes) ──────────────────────────
         # Key: button states + size + calibration state
         hud_key = (new_w, new_h, camera_hidden, bool(target_person_lock), is_calibrating,
-                   int(calibration_progress))
+                   int(calibration_progress), self._cam_hover)
         if self._cached_hud_overlay is None or self._cached_hud_key != hud_key:
             hud = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
             h_draw = ImageDraw.Draw(hud)
@@ -2445,8 +2451,7 @@ class ShieldFSLApp:
             self._cached_hud_key = hud_key
 
         # Composite: paste HUD overlay onto camera frame
-        if not camera_hidden and pil_cam is not None:
-            cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
+        cam_crop.paste(self._cached_hud_overlay, (0, 0), self._cached_hud_overlay)
 
         # Scale cam_crop to match ui_scale for canvas
         scaled_w = max(1, int(new_w * self.ui_scale))
@@ -2467,6 +2472,7 @@ class ShieldFSLApp:
                                fill=(20, 35, 60, 205), outline=hex2rgb("#3B82F6"), width=1)
 
         self._cam_btn_rects = {}
+        centers = {}
         btn_r = 20
         gap = (dock_w - 6 * btn_r) // 4
         specs = [
@@ -2482,9 +2488,13 @@ class ShieldFSLApp:
             global_by = offset_y + by
             self._cam_btn_rects[b_type] = (global_bx - btn_r, global_by - btn_r, global_bx + btn_r, global_by + btn_r)
 
-            b_fill = "#2563EB" if is_active else "#1E293B"
+            centers[b_type] = bx
+            hov_b = (b_type == self._cam_hover)
+            b_fill = "#2563EB" if is_active else ("#334155" if hov_b else "#1E293B")
             draw.ellipse([bx - btn_r, by - btn_r, bx + btn_r, by + btn_r],
-                         fill=hex2rgb(b_fill), outline=hex2rgb("#60A5FA" if is_active else "#475569"), width=1)
+                         fill=hex2rgb(b_fill),
+                         outline=hex2rgb("#93C5FD" if hov_b else ("#60A5FA" if is_active else "#475569")),
+                         width=2 if hov_b else 1)
 
             if b_type == "cam":
                 draw.rounded_rectangle([bx - 8, by - 5, bx + 8, by + 5], radius=2, outline=hex2rgb(WHITE), width=2)
@@ -2497,6 +2507,25 @@ class ShieldFSLApp:
             elif b_type == "shield":
                 draw.polygon([(bx - 8, by - 7), (bx + 8, by - 7), (bx + 8, by + 3), (bx, by + 9), (bx - 8, by + 3)],
                              outline=hex2rgb(WHITE), width=2)
+
+        # Hover tooltip above the dock
+        hov = self._cam_hover
+        if hov in centers:
+            tips = {
+                "cam": "Switch camera",
+                "eye": "Show camera" if camera_hidden else "Hide camera",
+                "shield": ("Calibrating..." if is_calibrating
+                           else "Recalibrate tracking" if target_person_lock is not None
+                           else "Calibrate tracking"),
+            }
+            txt = tips[hov]
+            tw = int(draw.textlength(txt, font=_get_font(12, True)))
+            pw, ph = tw + 26, 30
+            px = max(8, min(new_w - pw - 8, centers[hov] - pw // 2))
+            py = dock_y - ph - 10
+            draw.rounded_rectangle([px, py, px + pw, py + ph], radius=ph // 2,
+                                   fill=(15, 23, 42, 240), outline=hex2rgb("#60A5FA"), width=1)
+            _draw_text(draw, px + pw // 2, py + ph // 2, txt, size=12, fill=WHITE, bold=True, anchor="mm")
 
     def _draw_right_panel(self, now):
         rx, ry, rw, rh = self.RIGHT_X, self.CONTENT_Y, self.RIGHT_W, self.CONTENT_H
