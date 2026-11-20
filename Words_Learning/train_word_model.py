@@ -36,44 +36,12 @@ class SafeUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 # ── Hand normalization (scale-invariant) ────────────────────────────────
-def normalize_hand_sequence(hand_seq):
-    seq = np.asarray(hand_seq, dtype=np.float32)
-    if seq.size == 0:
-        return seq
-    out = seq.copy()
-    spans = []
-    for off in (0, 63):
-        tip_idx = 12 * 3          # landmark 12 (middle fingertip)
-        tip = out[0, off + tip_idx : off + tip_idx + 3]
-        span = np.linalg.norm(tip)
-        if span < 1e-6:
-            span = 1.0
-        spans.append(span)
-        out[:, off:off + 63] = out[:, off:off + 63] / span
+import sys as _sys
+_sys.path.insert(0, ROOT_DIR)
+from fsl_features import (
+    normalize_hand_sequence,
+)
 
-    # Normalize motion velocities, speeds, and trajectories by hand spans
-    if out.shape[1] >= 198:
-        out[:, 174:177] = out[:, 174:177] / spans[0]
-        out[:, 180:183] = out[:, 180:183] / spans[0]
-        out[:, 186:187] = out[:, 186:187] / spans[0]
-        out[:, 188:189] = out[:, 188:189] / spans[0]
-        out[:, 192:195] = out[:, 192:195] / spans[0]
-
-        out[:, 177:180] = out[:, 177:180] / spans[1]
-        out[:, 183:186] = out[:, 183:186] / spans[1]
-        out[:, 187:188] = out[:, 187:188] / spans[1]
-        out[:, 189:190] = out[:, 189:190] / spans[1]
-        out[:, 195:198] = out[:, 195:198] / spans[1]
-    elif out.shape[1] >= 180:
-        out[:, 174:177] = out[:, 174:177] / spans[0]
-        out[:, 177:180] = out[:, 177:180] / spans[1]
-    elif out.shape[1] >= 144:
-        out[:, 138:141] = out[:, 138:141] / spans[0]
-        out[:, 141:144] = out[:, 141:144] / spans[1]
-    elif out.shape[1] >= 132:
-        out[:, 126:129] = out[:, 126:129] / spans[0]
-        out[:, 129:132] = out[:, 129:132] / spans[1]
-    return out
 
 def _rot_scale(block, cos, sin, scale):
     xy = block[..., :2]

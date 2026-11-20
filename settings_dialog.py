@@ -183,7 +183,7 @@ class SettingsDialog(tk.Toplevel):
                  fg="#38BDF8" if has_gpu else "#F59E0B", bg="#152347").pack(side=tk.LEFT, padx=6)
 
         tk.Label(gpu_left,
-                 text=f"Offloads video pipeline, color conversion, and image tensor resizing to your GPU.\n"
+                 text=f"Not connected yet: MediaPipe and TensorFlow still run on CPU.\n"
                       f"Dedicated graphics adapter: {gpu_dev_name}",
                  font=("Segoe UI", 9), fg="#94A3B8", bg="#152347", justify="left").pack(anchor="w", pady=(2, 0))
 

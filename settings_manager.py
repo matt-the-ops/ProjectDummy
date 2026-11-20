@@ -28,8 +28,8 @@ DEFAULT_SETTINGS = {
     "performance_preset": "balanced", # "potato", "balanced", "quality"
     "use_gpu": True,                 # Hardware acceleration via NVIDIA RTX / OpenCL
     "face_mesh_mode": "calibrate_only", # "off", "calibrate_only", "full"
-    "ml_w": 480,                     # ML input width (sharp hand & face capture)
-    "ml_h": 360,                     # ML input height
+    "ml_w": 320,                     # ML input width (matches measured timings)
+    "ml_h": 240,                     # ML input height
     "target_fps": 60,                # Target GUI refresh rate (30, 60)
     "partner_fps": 30,               # Partner window refresh rate (15, 20, 30)
     "camera_index": 0,               # Active camera device index
@@ -82,8 +82,8 @@ PRESETS = {
         "performance_preset": "balanced",
         "use_gpu": True,
         "face_mesh_mode": "calibrate_only",
-        "ml_w": 480,
-        "ml_h": 360,
+        "ml_w": 320,
+        "ml_h": 240,
         "target_fps": 60,
         "partner_fps": 30,
     },
