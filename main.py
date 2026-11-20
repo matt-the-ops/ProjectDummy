@@ -42,6 +42,8 @@ from sentence_translator import translate_sentence
 from coop_bus import coop_hub
 from non_fsl_window import NonFSLWindow
 
+import mediapipe as mp
+from mediapipe.framework.formats import landmark_pb2
 try:
     import mediapipe.solutions.holistic as mp_holistic
     import mediapipe.solutions.drawing_utils as mp_drawing
@@ -806,7 +808,7 @@ def smooth_landmarks(current_lms, previous_lms, alpha=0.70):
     if previous_lms is None or current_lms is None:
         return current_lms
     try:
-        smoothed = mp.framework.formats.landmark_pb2.NormalizedLandmarkList()
+        smoothed = landmark_pb2.NormalizedLandmarkList()
         for cur, prev in zip(current_lms.landmark, previous_lms.landmark):
             sm_lm = smoothed.landmark.add()
             sm_lm.x = alpha * cur.x + (1.0 - alpha) * prev.x

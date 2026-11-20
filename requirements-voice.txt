@@ -1,0 +1,10 @@
+torch
+torchaudio
+transformers
+librosa
+soundfile
+faiss-cpu
+praat-parselmouth
+scipy
+ffmpeg-python
+av
