@@ -25,10 +25,11 @@ ProjectDummy/
 ├── data/                       # Datasets
 │   ├── fsl_dataset.csv         # Letters dataset
 │   └── word_dataset/           # Word sequence frames (.npy)
-├── assets/                     # Media & design assets
-│   ├── bmo/                    # BMO face avatars (closed, open, idle, talk)
-│   ├── Logo/                   # Project logos
-│   └── Neumorphism References/ # UI mockups and visual references
+├── assets/                     # Media assets
+│   ├── bmo/                    # BMO face avatars (closed, open)
+│   ├── fsl_icons/              # Word icons referenced by icon_map.json
+│   ├── logo.png                # Fallback logo
+│   └── shield_logo.png         # Primary logo
 ├── requirements.txt
 └── README.md
 ```
