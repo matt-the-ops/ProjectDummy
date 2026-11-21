@@ -2194,12 +2194,12 @@ class ShieldFSLApp:
         self._cam_btn_rects = {}
         centers = {}
         btn_r = 20
-        gap = (dock_w - 6 * btn_r) // 4
         specs = [
             ("cam", False),
             ("eye", not camera_hidden),
             ("shield", target_person_lock is not None or is_calibrating),
         ]
+        gap = (dock_w - 6 * btn_r) // 4
 
         for i, (b_type, is_active) in enumerate(specs):
             bx = dock_x + gap + i * (2 * btn_r + gap) + btn_r
