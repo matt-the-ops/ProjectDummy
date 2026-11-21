@@ -40,6 +40,8 @@ import sys as _sys
 _sys.path.insert(0, ROOT_DIR)
 from fsl_features import (
     normalize_hand_sequence,
+    atomic_replace_npy,
+    atomic_replace_pickle,
 )
 
 
@@ -215,7 +217,7 @@ def load_dataset():
 
     le = LabelEncoder()
     y_enc = le.fit_transform(labels_arr)
-    np.save(CLASSES_PATH, le.classes_)
+    atomic_replace_npy(CLASSES_PATH, le.classes_)
     print(f"[OK] Saved class list: {le.classes_}")
 
     return hand_seqs, face_vecs, y_enc, le.classes_
@@ -282,7 +284,12 @@ def train_motion_model(X_hand, y, classes):
     preds = np.argmax(model.predict(Xte, verbose=0), axis=1)
     print(classification_report(yte, preds, target_names=classes))
 
-    model.save(MOTION_MODEL_PATH)
+    # Atomic write: save to a *.tmp.h5 (Keras needs the .h5 suffix for the
+    # single-file HDF5 format), then os.replace() so a kiosk starting
+    # mid-train never loads a half-written model file.
+    tmp_motion = MOTION_MODEL_PATH + ".tmp.h5"
+    model.save(tmp_motion)
+    os.replace(tmp_motion, MOTION_MODEL_PATH)
     print(f"[OK] Saved -> '{MOTION_MODEL_PATH}'")
     return model
 
@@ -312,12 +319,11 @@ def train_face_model(X_face, y, classes):
     print(classification_report(yte, preds, target_names=classes))
 
     payload = {'model': face_pipeline, 'classes': classes}
-    with open(FACE_MODEL_PATH, 'wb') as f:
-        pickle.dump(payload, f)
+    atomic_replace_pickle(FACE_MODEL_PATH, payload)
     print(f"[OK] Saved -> '{FACE_MODEL_PATH}'")
     return face_pipeline
 
-def main():
+def train_word_model():
     print("==================================================")
     print("   WORDS LEARNING: DUAL-GATE MODEL TRAINER        ")
     print("==================================================\n")
@@ -333,5 +339,9 @@ def main():
     print(f"  Classes      : {classes}")
     print("\nRun python main.py to start the translator.")
 
+
+# Backwards-compatible alias for callers importing ``main``.
+main = train_word_model
+
 if __name__ == '__main__':
-    main()
+    train_word_model()

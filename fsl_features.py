@@ -367,3 +367,27 @@ def resolve_and_smooth_hands(results, last_left, last_right, lost_left, lost_rig
             last_right = None
 
     return last_left, last_right, lost_left, lost_right
+
+
+# ─── Atomic file writes ───────────────────────────────────────────────────────
+# Save to *.tmp, then os.replace() so a kiosk starting mid-train never loads
+# a half-written model or dataset file.
+import pickle as _pickle
+
+
+def atomic_replace_bytes(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def atomic_replace_npy(path, arr):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        np.save(f, np.asarray(arr))
+    os.replace(tmp, path)
+
+
+def atomic_replace_pickle(path, obj):
+    atomic_replace_bytes(path, _pickle.dumps(obj))

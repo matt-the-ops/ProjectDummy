@@ -11,6 +11,10 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_FILE = os.path.join(ROOT_DIR, 'data', 'fsl_dataset.csv')
 MODEL_FILE = os.path.join(ROOT_DIR, 'models', 'fsl_model.pkl')
 
+import sys as _sys
+_sys.path.insert(0, ROOT_DIR)
+from fsl_features import atomic_replace_pickle
+
 def train_letter_model():
     print("==========================================")
     print("    FSL LETTER MODEL TRAINER (Mode 1)     ")
@@ -56,8 +60,7 @@ def train_letter_model():
     print(classification_report(y_test, y_pred))
 
     os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
-    with open(MODEL_FILE, 'wb') as f:
-        pickle.dump({'model': model}, f)
+    atomic_replace_pickle(MODEL_FILE, {'model': model})
 
     print(f"[OK] Successfully saved trained letter model to '{MODEL_FILE}'.")
 
