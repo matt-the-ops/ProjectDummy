@@ -1,4 +1,9 @@
 *.bak
+timing_*.txt
+/data_bak/
+/models_bak/
+.kilo/
+*.tmp
 venv/
 __pycache__/
 # Byte-compiled / optimized / DLL files
