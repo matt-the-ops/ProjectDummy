@@ -38,11 +38,11 @@ from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageFont
 import pyttsx3
 import tensorflow as tf
 from tensorflow.keras.models import load_model
-from sentence_translator import translate_sentence
-from coop_bus import coop_hub
-from non_fsl_window import NonFSLWindow
-from settings_manager import settings, DEFAULT_SETTINGS
-from settings_dialog import SettingsDialog
+from bmo.sentence import translate_sentence
+from bmo.coop_bus import coop_hub
+from bmo.ui.partner_window import NonFSLWindow
+from bmo.settings import settings, DEFAULT_SETTINGS
+from bmo.ui.settings_dialog import SettingsDialog
 
 _DEFAULT_KEYS = DEFAULT_SETTINGS["keybinds"]
 
@@ -169,12 +169,7 @@ def speak_text(text):
 
     threading.Thread(target=_run, daemon=True).start()
 
-# ─────────────────────────────────────────────
-#  Paths
-# ─────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
-ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
+from bmo.config import MODELS_DIR, ASSETS_DIR
 
 # ─────────────────────────────────────────────
 #  Safe Unpickler
@@ -240,7 +235,7 @@ else:
 HAND_FEATURES = 198   # 126 shape + 36 spatial anchors + 12 facial emotion + 18 per-frame velocities/speeds/direction ratios + 6 trajectory
 FACE_FEATURES = 1404
 
-from fsl_features import (
+from bmo.features.fsl_features import (
     get_detailed_face_and_body_anchors,
     extract_hand_frame,
     get_raw_hand_anchors,

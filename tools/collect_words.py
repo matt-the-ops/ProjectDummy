@@ -14,11 +14,14 @@ except ModuleNotFoundError:
     mp_holistic = mp.solutions.holistic
     mp_drawing = mp.solutions.drawing_utils
 
-ROOT_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH      = os.path.join(ROOT_DIR, 'data', 'word_dataset')
-MODELS_DIR     = os.path.join(ROOT_DIR, 'models')
-ICONS_DIR      = os.path.join(ROOT_DIR, 'assets', 'fsl_icons')
-ICON_MAP_FILE  = os.path.join(ROOT_DIR, 'icon_map.json')
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bmo.config import DATA_DIR, MODELS_DIR, ASSETS_DIR, ROOT_DIR, ICONS_DIR, ICON_MAP_FILE
+
+DATA_PATH      = os.path.join(DATA_DIR, 'word_dataset')
+ICON_MAP_FILE  = ICON_MAP_FILE
+ICONS_DIR      = ICONS_DIR
 
 SEQUENCE_LEN   = 40       # hand motion frames
 HAND_FEATURES  = 198      # 126 shape + 36 spatial anchors + 12 facial emotion + 18 per-frame velocities/speeds/direction ratios + 6 trajectory
@@ -29,8 +32,8 @@ os.makedirs(DATA_PATH, exist_ok=True)
 # ─── Feature Helpers ────────────────────────────────────────────────────────
 
 import sys as _sys
-_sys.path.insert(0, ROOT_DIR)
-from fsl_features import (
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from bmo.features.fsl_features import (
     get_detailed_face_and_body_anchors,
     extract_hand_frame,
     get_raw_hand_anchors,

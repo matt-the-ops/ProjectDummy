@@ -14,17 +14,9 @@ import parselmouth
 from scipy import signal
 from pathlib import Path
 
+from bmo.config import BMO_PTH, BMO_INDEX, MODELS_DIR
+
 logger = logging.getLogger(__name__)
-
-# ─── Paths ────────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).resolve().parent
-MODELS_DIR  = BASE_DIR / "models"
-RVC_ENGINE  = BASE_DIR / "rvc_engine"
-BMO_PTH     = MODELS_DIR / "BMO Voice" / "BMO.pth"
-BMO_INDEX   = MODELS_DIR / "BMO Voice" / "added_IVF548_Flat_nprobe_1_BMO_v2.index"
-HF_HUBERT   = "facebook/hubert-base-ls960"   # auto-downloaded on first run
-
-sys.path.insert(0, str(BASE_DIR))
 
 # ─── Device ───────────────────────────────────────────────────────────────────
 DEVICE    = "cuda" if torch.cuda.is_available() else "cpu"
@@ -57,8 +49,8 @@ def _load_hubert():
         return
     from transformers import HubertModel, AutoFeatureExtractor
     logger.info("[BMO Voice] Loading HuBERT feature extractor...")
-    _hubert_extractor = AutoFeatureExtractor.from_pretrained(HF_HUBERT)
-    _hubert_model = HubertModel.from_pretrained(HF_HUBERT, torch_dtype=dtype)
+    _hubert_extractor = AutoFeatureExtractor.from_pretrained("facebook/hubert-base-ls960")
+    _hubert_model = HubertModel.from_pretrained("facebook/hubert-base-ls960", torch_dtype=dtype)
     _hubert_model = _hubert_model.to(DEVICE).eval()
     logger.info("[BMO Voice] HuBERT ready.")
 

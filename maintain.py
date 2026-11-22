@@ -4,8 +4,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import numpy as np
 from PIL import Image, ImageTk
-from settings_manager import settings
-from fsl_features import (
+from bmo.settings import settings
+from bmo.features.fsl_features import (
     resolve_and_smooth_hands,
     extract_hand_frame,
     get_raw_hand_anchors,
@@ -17,10 +17,11 @@ mp_holistic, mp_draw = mp.solutions.holistic, mp.solutions.drawing_utils
 
 import pandas as pd
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-CSV = os.path.join(BASE, "data", "fsl_dataset.csv")
-WORDS = os.path.join(BASE, "data", "word_dataset")
-ICONS = os.path.join(BASE, "icon_map.json")
+from bmo.config import DATA_DIR, MODELS_DIR, ICON_MAP_FILE, ROOT_DIR
+
+CSV = os.path.join(DATA_DIR, "fsl_dataset.csv")
+WORDS = os.path.join(DATA_DIR, "word_dataset")
+ICONS = ICON_MAP_FILE
 
 
 def load_signs():
@@ -438,10 +439,10 @@ class App(tk.Tk):
                 self.after(0, lambda: self.status.config(text=t))
             try:
                 say("Training letters...")
-                from Letters_Learning.train_letter_model import train_letter_model
+                from tools.train_letters import train_letter_model
                 train_letter_model()
                 say("Training words (slow)...")
-                from Words_Learning.train_word_model import train_word_model
+                from tools.train_words import train_word_model
                 train_word_model()
                 msg = "Done. Restart kiosk."
             except Exception as e:

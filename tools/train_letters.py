@@ -6,14 +6,15 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-# Root directory reference
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CSV_FILE = os.path.join(ROOT_DIR, 'data', 'fsl_dataset.csv')
-MODEL_FILE = os.path.join(ROOT_DIR, 'models', 'fsl_model.pkl')
-
 import sys as _sys
-_sys.path.insert(0, ROOT_DIR)
-from fsl_features import atomic_replace_pickle
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bmo.config import DATA_DIR, MODELS_DIR, LETTER_CSV_FILE, LETTER_MODEL_FILE
+
+CSV_FILE = LETTER_CSV_FILE
+MODEL_FILE = LETTER_MODEL_FILE
+
+from bmo.features.fsl_features import atomic_replace_pickle
 
 def train_letter_model():
     print("==========================================")

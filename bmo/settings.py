@@ -8,7 +8,7 @@ import os
 import json
 import threading
 
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+from bmo.config import SETTINGS_FILE
 
 def get_gpu_device_info():
     """Detects available hardware GPU via OpenCV OpenCL / DirectML."""

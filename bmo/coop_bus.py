@@ -5,8 +5,7 @@ import time
 import numpy as np
 from PIL import Image
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, 'models')
+from bmo.config import MODELS_DIR, ICON_MAP_FILE, ROOT_DIR
 
 
 class SafeUnpickler(pickle.Unpickler):
@@ -49,14 +48,14 @@ def get_trained_signs(models_dir=MODELS_DIR):
     return trained
 
 
-def load_icon_palette(icon_map_filename="icon_map.json", base_dir=BASE_DIR):
+def load_icon_palette(icon_map_filename=ICON_MAP_FILE, base_dir=ROOT_DIR):
     """
     Enforces the Hard Rule:
     The icon palette is built ONLY from signs the system already knows (word_classes.npy + letters).
     A sign appears only if it is trained AND has an icon in icon_map.json.
     Otherwise it is silently skipped.
     """
-    map_path = os.path.join(base_dir, icon_map_filename)
+    map_path = icon_map_filename
     if not os.path.exists(map_path):
         return []
 
@@ -89,9 +88,9 @@ def load_icon_palette(icon_map_filename="icon_map.json", base_dir=BASE_DIR):
     return valid_palette
 
 
-def get_icon_path_for_sign(sign_name, icon_map_filename="icon_map.json", base_dir=BASE_DIR):
+def get_icon_path_for_sign(sign_name, icon_map_filename=ICON_MAP_FILE, base_dir=ROOT_DIR):
     """Resolves icon path for a sign name if it exists in icon_map.json and is on disk."""
-    map_path = os.path.join(base_dir, icon_map_filename)
+    map_path = icon_map_filename
     if not os.path.exists(map_path):
         return None
     try:

@@ -26,17 +26,14 @@ import numpy as np
 import cv2
 from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageFont
 
-from coop_bus import coop_hub, load_icon_palette
-from sentence_translator import translate_sentence
+from bmo.coop_bus import coop_hub, load_icon_palette
+from bmo.sentence import translate_sentence
+from bmo.settings import settings as _settings
 
-try:
-    from settings_manager import settings as _settings
-except Exception:          # settings module optional
-    _settings = None
+from bmo.config import ASSETS_DIR
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
+# ASSETS_DIR comes from bmo.config
 
 ENABLE_PERF = os.environ.get("PERF") == "1"
 MIRROR_FEED = True            # True = same mirrored view the signer sees. False = face-to-face view.

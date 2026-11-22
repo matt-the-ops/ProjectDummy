@@ -13,10 +13,12 @@ from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
-# Root directory reference
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_PATH = os.path.join(ROOT_DIR, 'data', 'word_dataset')
-MODELS_DIR = os.path.join(ROOT_DIR, 'models')
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bmo.config import DATA_DIR, MODELS_DIR
+
+DATA_PATH = os.path.join(DATA_DIR, 'word_dataset')
 MOTION_MODEL_PATH = os.path.join(MODELS_DIR, 'word_motion_model.h5')
 FACE_MODEL_PATH = os.path.join(MODELS_DIR, 'word_face_model.pkl')
 CLASSES_PATH = os.path.join(MODELS_DIR, 'word_classes.npy')
@@ -36,9 +38,7 @@ class SafeUnpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 # ── Hand normalization (scale-invariant) ────────────────────────────────
-import sys as _sys
-_sys.path.insert(0, ROOT_DIR)
-from fsl_features import (
+from bmo.features.fsl_features import (
     normalize_hand_sequence,
     atomic_replace_npy,
     atomic_replace_pickle,

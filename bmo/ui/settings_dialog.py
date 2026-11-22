@@ -7,7 +7,9 @@ import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
-from settings_manager import settings, KEYBIND_LABELS, PRESETS, get_gpu_device_info
+from bmo.settings import settings, KEYBIND_LABELS, PRESETS, get_gpu_device_info
+
+from bmo.config import ASSETS_DIR
 
 
 class SettingsDialog(tk.Toplevel):
@@ -39,7 +41,7 @@ class SettingsDialog(tk.Toplevel):
 
         # Try setting icon
         try:
-            icon_p = os.path.join(os.path.dirname(__file__), "assets", "shield_logo.png")
+            icon_p = os.path.join(ASSETS_DIR, "shield_logo.png")
             if os.path.exists(icon_p):
                 im = Image.open(icon_p).resize((32, 32), Image.Resampling.LANCZOS)
                 self._icon_tk = ImageTk.PhotoImage(im)
@@ -526,7 +528,7 @@ class SettingsDialog(tk.Toplevel):
 
     def _reset_keybinds(self):
         settings.settings["keybinds"] = dict(settings.get("keybinds", {}))
-        from settings_manager import DEFAULT_SETTINGS
+        from bmo.settings import DEFAULT_SETTINGS
         settings.settings["keybinds"] = dict(DEFAULT_SETTINGS["keybinds"])
         settings.save()
         self._populate_keybind_rows()

@@ -8,23 +8,13 @@ import numpy as np
 import pandas as pd
 import mediapipe as mp
 
-try:
-    import mediapipe.solutions.hands as mp_hands
-    import mediapipe.solutions.drawing_utils as mp_drawing
-    import mediapipe.solutions.drawing_styles as mp_drawing_styles
-except ModuleNotFoundError:
-    mp_hands = mp.solutions.hands
-    mp_drawing = mp.solutions.drawing_utils
-    mp_drawing_styles = mp.solutions.drawing_styles
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Root directory reference
-ROOT_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR   = os.path.join(ROOT_DIR, 'data')
-CSV_FILE   = os.path.join(DATA_DIR, 'fsl_dataset.csv')
-MODELS_DIR = os.path.join(ROOT_DIR, 'models')
-ICONS_DIR  = os.path.join(ROOT_DIR, 'assets', 'fsl_icons')
-ICON_MAP_FILE = os.path.join(ROOT_DIR, 'icon_map.json')
-MODEL_FILE = os.path.join(MODELS_DIR, 'fsl_model.pkl')
+from bmo.config import DATA_DIR, MODELS_DIR, ICONS_DIR, ICON_MAP_FILE, LETTER_CSV_FILE, LETTER_MODEL_FILE
+
+CSV_FILE   = LETTER_CSV_FILE
+MODEL_FILE = LETTER_MODEL_FILE
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -397,7 +387,7 @@ def record_letter(letter_name, num_samples=30):
 def run_trainer():
     """Runs the letter trainer model directly."""
     try:
-        from Letters_Learning.train_letter_model import train_letter_model
+        from tools.train_letters import train_letter_model
     except ImportError:
         try:
             from train_letter_model import train_letter_model
