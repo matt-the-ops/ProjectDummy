@@ -10,5 +10,7 @@
   "please": "assets/fsl_icons/please.png",
   "sorry": "assets/fsl_icons/sorry.png",
   "thank_you": "assets/fsl_icons/thank_you.png",
-  "yes": "assets/fsl_icons/yes.png"
+  "yes": "assets/fsl_icons/yes.png",
+  "what": "assets/fsl_icons/what.png",
+  "do": "assets/fsl_icons/do.png"
 }

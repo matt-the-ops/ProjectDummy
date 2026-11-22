@@ -1,7 +1,7 @@
 import cv2, csv, traceback
 import os, json, shutil, threading, math
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import numpy as np
 from PIL import Image, ImageTk
 from bmo.settings import settings
@@ -17,7 +17,7 @@ mp_holistic, mp_draw = mp.solutions.holistic, mp.solutions.drawing_utils
 
 import pandas as pd
 
-from bmo.config import DATA_DIR, MODELS_DIR, ICON_MAP_FILE, ROOT_DIR
+from bmo.config import DATA_DIR, MODELS_DIR, ICON_MAP_FILE, ROOT_DIR, ICONS_DIR
 
 CSV = os.path.join(DATA_DIR, "fsl_dataset.csv")
 WORDS = os.path.join(DATA_DIR, "word_dataset")
@@ -47,12 +47,61 @@ def load_signs():
     return signs
 
 
+def load_icon_map():
+    if os.path.isfile(ICON_MAP_FILE):
+        try:
+            with open(ICON_MAP_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            pass
+    return {}
+
+
+def save_icon_map(d):
+    os.makedirs(os.path.dirname(os.path.abspath(ICON_MAP_FILE)), exist_ok=True)
+    tmp = ICON_MAP_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, ICON_MAP_FILE)
+
+
+def set_icon(label, src):
+    if not src.lower().endswith(".png"):
+        raise ValueError("Only PNG files are supported")
+    with Image.open(src) as img:
+        img.verify()
+    os.makedirs(ICONS_DIR, exist_ok=True)
+    dest_name = f"{label.lower()}.png"
+    dest = os.path.join(ICONS_DIR, dest_name)
+    if os.path.abspath(src) != os.path.abspath(dest):
+        shutil.copy2(src, dest)
+    m = load_icon_map()
+    for k in list(m):
+        if k.lower() == label.lower():
+            del m[k]
+    m[label.lower()] = f"assets/fsl_icons/{dest_name}"
+    save_icon_map(m)
+
+
+def remove_icon(label):
+    lbl = label.lower()
+    m = load_icon_map()
+    rel = None
+    keys = [k for k in m if k.lower() == lbl]
+    if keys:
+        for k in keys:
+            rel = m.pop(k)
+        save_icon_map(m)
+    for p in (os.path.join(ICONS_DIR, f"{lbl}.png"), os.path.join(ROOT_DIR, rel) if rel else None):
+        if p and os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 def load_icons():
-    try:
-        with open(ICONS, encoding="utf-8") as f:
-            return {key.lower() for key in json.load(f)}
-    except (OSError, ValueError):
-        return set()
+    return {key.lower() for key in load_icon_map()}
 
 
 ORDER = {"letter": 0, "number": 1, "word": 2}
@@ -60,19 +109,23 @@ ORDER = {"letter": 0, "number": 1, "word": 2}
 
 def delete_sign(label, kind):
     if kind == "word":
+        found = False
         for name in os.listdir(WORDS) if os.path.isdir(WORDS) else []:
             path = os.path.realpath(os.path.join(WORDS, name))
             if os.path.basename(path).lower() == label.lower():
                 if os.path.dirname(path) != os.path.realpath(WORDS):
                     raise ValueError("bad path")
                 shutil.rmtree(path)
-                return
-        raise FileNotFoundError(f"Word '{label}' not found")
-
-    df = pd.read_csv(CSV)
-    df = df[df["label"].astype(str).str.lower() != label.lower()]
-    df.to_csv(CSV + ".tmp", index=False)
-    os.replace(CSV + ".tmp", CSV)
+                found = True
+                break
+        if not found:
+            raise FileNotFoundError(f"Word '{label}' not found")
+    else:
+        df = pd.read_csv(CSV)
+        df = df[df["label"].astype(str).str.lower() != label.lower()]
+        df.to_csv(CSV + ".tmp", index=False)
+        os.replace(CSV + ".tmp", CSV)
+    remove_icon(label)
 
 
 def rename_sign(old, new, kind):
@@ -89,13 +142,40 @@ def rename_sign(old, new, kind):
         df.to_csv(CSV + ".tmp", index=False)
         os.replace(CSV + ".tmp", CSV)
     try:
-        with open(ICONS, encoding="utf-8") as f:
-            im = json.load(f)
+        im = load_icon_map()
+        changed = False
+        old_l = old.lower()
+        new_l = new.lower()
+        new_png = f"{new_l}.png"
+        new_icon_path = os.path.join(ICONS_DIR, new_png)
+        new_map_path = f"assets/fsl_icons/{new_png}"
+
+        old_val = None
         for k in list(im):
-            if k.lower() == old:
-                im[new] = im.pop(k)
-        with open(ICONS, "w", encoding="utf-8") as f:
-            json.dump(im, f, indent=2)
+            if k.lower() == old_l:
+                old_val = im.pop(k)
+                im[new_l] = new_map_path
+                changed = True
+
+        src_candidates = []
+        if old_val:
+            src_candidates.append(os.path.join(ROOT_DIR, old_val))
+        src_candidates.append(os.path.join(ICONS_DIR, f"{old_l}.png"))
+
+        for src in src_candidates:
+            if os.path.isfile(src):
+                os.makedirs(ICONS_DIR, exist_ok=True)
+                if os.path.abspath(src) != os.path.abspath(new_icon_path):
+                    if os.path.exists(new_icon_path):
+                        os.remove(new_icon_path)
+                    os.replace(src, new_icon_path)
+                if new_l not in im:
+                    im[new_l] = new_map_path
+                    changed = True
+                break
+
+        if changed:
+            save_icon_map(im)
     except (OSError, ValueError):
         pass
 
@@ -116,9 +196,10 @@ class Recorder(tk.Toplevel):
         self.on_done = on_done
         self.cap = self.holo = None
         self.pending, self.take, self.left = False, None, 0
+        self.recorded = 0
         self.state = [None, None, 0, 0]
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.bind("<Escape>", lambda e: self.close())
+        self.bind("<Escape>", lambda e: self.on_escape())
         f = self.setup = ttk.Frame(self, padding=16)
         f.pack()
         self.kind = tk.StringVar(value="letter")
@@ -158,12 +239,33 @@ class Recorder(tk.Toplevel):
         self.focus_force()
         self.show(); self.loop()
 
+    def finish(self):
+        messagebox.showinfo("Done", f"Finished recording '{self.label}'.", parent=self)
+        if self.label.lower() not in load_icons():
+            if messagebox.askyesno("Icon", f"Assign an icon for '{self.label}'?", parent=self):
+                src = filedialog.askopenfilename(
+                    parent=self,
+                    title=f"Select icon for '{self.label}'",
+                    filetypes=[("PNG files", "*.png"), ("All files", "*.*")],
+                )
+                if src:
+                    try:
+                        set_icon(self.label, src)
+                    except Exception as e:
+                        messagebox.showerror("Error", str(e), parent=self)
+        return self.close()
+
     def show(self):
         if self.left <= 0:
-            messagebox.showinfo("Done", f"Finished recording '{self.label}'.", parent=self)
-            return self.close()
+            return self.finish()
         what = "motion" if self.kind.get() == "word" else "pose"
         self.msg.config(text=f"'{self.label}' | {self.left} left | ENTER = record {what} | ESC = done")
+
+    def on_escape(self):
+        if getattr(self, "recorded", 0) > 0:
+            self.finish()
+        else:
+            self.close()
 
     def shoot(self, _=None):
         if self.left <= 0:
@@ -216,6 +318,7 @@ class Recorder(tk.Toplevel):
             if new:
                 wr.writerow(["label"] + [f"{c}_{i}" for i in range(21) for c in "xyz"])
             wr.writerow([self.label] + row)
+        self.recorded += 1
         self.left -= 1
         self.show()
 
@@ -236,6 +339,7 @@ class Recorder(tk.Toplevel):
         np.save(os.path.join(d, f"{idx}_hand.npy"), full)
         np.save(os.path.join(d, f"{idx}_face.npy"), fseq.mean(axis=0))
         np.save(os.path.join(d, f"{idx}_face_seq.npy"), fseq)
+        self.recorded += 1
         self.left -= 1
         self.show()
 
@@ -284,6 +388,19 @@ Select a row, click Rename, type the new name.
 
 DELETE A SIGN
 Select a row, click Delete. This removes all its samples.
+
+ICONS
+Select a row and click Set icon to assign a PNG image to that sign.
+Click Remove icon to remove its icon. When recording a new sign that
+has no icon, you will also be prompted to choose one when finished.
+Icons are stored in assets/fsl_icons and mapped in icon_map.json.
+
+KEYBINDS
+Click Keybinds to customize keyboard shortcuts for kiosk actions.
+Click any shortcut button and press a key to rebind it. If the key is
+already in use, the two actions will swap keys. Modifier keys like
+Shift, Ctrl, Alt, and Caps Lock cannot be bound. Restart the kiosk
+to apply new keybinds.
 
 TRAIN MODELS (important)
 Recording only saves samples. The kiosk does not learn until you:
@@ -343,6 +460,9 @@ class App(tk.Tk):
         ttk.Button(bar, text="Delete", command=self.on_delete)
         ttk.Button(bar, text="Edit samples", command=self.on_edit)
         ttk.Button(bar, text="Rename", command=self.on_rename)
+        ttk.Button(bar, text="Set icon", command=self.on_set_icon)
+        ttk.Button(bar, text="Remove icon", command=self.on_remove_icon)
+        ttk.Button(bar, text="Keybinds", command=self.on_keybinds)
         ttk.Button(bar, text="Refresh", command=self.refresh)
         ttk.Button(bar, text="Record", command=lambda: Recorder(self, self.refresh))
         self.train_btn = ttk.Button(bar, text="Train models", command=self.on_train)
@@ -429,6 +549,61 @@ class App(tk.Tk):
             return messagebox.showerror("Failed", str(e))
         self.refresh()
         self.status.config(text="Renamed. Retrain + restart kiosk.")
+
+    def on_set_icon(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        lbl = sel[0]
+        path = filedialog.askopenfilename(
+            parent=self,
+            title=f"Select icon for '{lbl}'",
+            filetypes=[("PNG files", "*.png"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            set_icon(lbl, path)
+            self.refresh()
+        except Exception as e:
+            messagebox.showerror("Error", str(e), parent=self)
+
+    def on_remove_icon(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        lbl = sel[0]
+        try:
+            remove_icon(lbl)
+            self.refresh()
+        except Exception as e:
+            messagebox.showerror("Error", str(e), parent=self)
+
+    def on_keybinds(self):
+        dlg = getattr(self, "settings_dialog", None)
+        if dlg and dlg.winfo_exists():
+            dlg.lift()
+            dlg.focus_force()
+            return
+        from bmo.ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        dlg._switch_tab("keys")
+        self.settings_dialog = dlg
+
+        def on_destroy(e):
+            if e.widget == dlg:
+                self.settings_dialog = None
+                self.status.config(text="Keybinds saved. Restart kiosk.")
+
+        dlg.bind("<Destroy>", on_destroy, add="+")
+        orig_close = dlg._on_close
+
+        def on_close():
+            orig_close()
+            self.settings_dialog = None
+            self.status.config(text="Keybinds saved. Restart kiosk.")
+
+        dlg._on_close = on_close
 
     def on_train(self):
         self.train_btn.state(["disabled"])

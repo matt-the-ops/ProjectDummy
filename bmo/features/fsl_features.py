@@ -372,6 +372,7 @@ def resolve_and_smooth_hands(results, last_left, last_right, lost_left, lost_rig
 # ─── Atomic file writes ───────────────────────────────────────────────────────
 # Save to *.tmp, then os.replace() so a kiosk starting mid-train never loads
 # a half-written model or dataset file.
+import os
 import pickle as _pickle
 
 
