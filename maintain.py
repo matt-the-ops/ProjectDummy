@@ -276,7 +276,7 @@ class Recorder(tk.Toplevel):
             self.pending = True
 
     def loop(self):
-        if not self.cap:
+        if not self.cap or self.holo is None:
             return
         ok, frame = self.cap.read()
         if ok:
