@@ -234,6 +234,17 @@ else:
 # ─────────────────────────────────────────────
 HAND_FEATURES = 198   # 126 shape + 36 spatial anchors + 12 facial emotion + 18 per-frame velocities/speeds/direction ratios + 6 trajectory
 FACE_FEATURES = 1404
+motion_fn = None
+if motion_model is not None:
+    try:
+        motion_fn = tf.function(
+            lambda x: motion_model(x, training=False),
+            input_signature=[tf.TensorSpec([1, 40, HAND_FEATURES], tf.float32)],
+        )
+        motion_fn(tf.zeros([1, 40, HAND_FEATURES], tf.float32))
+    except Exception as e:
+        print(f"[!] motion_fn disabled: {e}")
+        motion_fn = None
 
 from bmo.features.fsl_features import (
     get_detailed_face_and_body_anchors,
@@ -1358,6 +1369,7 @@ class ShieldFSLApp:
         lost_frames_right = 0
         MAX_LOST = 4
         _prev_t = time.time()
+        last_fid = -1
 
         with mp_holistic.Holistic(
             min_detection_confidence=0.50,
@@ -1366,10 +1378,11 @@ class ShieldFSLApp:
         ) as holistic:
 
             while self._running:
-                ret, frame = cam_capture.read()
-                if not ret or frame is None:
+                fid, frame = cam_capture.read_latest(last_fid)
+                if frame is None:
                     time.sleep(0.005)
                     continue
+                last_fid = fid
 
                 frame     = cv2.flip(frame, 1)
                 H_f, W_f  = frame.shape[:2]
@@ -1485,7 +1498,8 @@ class ShieldFSLApp:
                                     hand_norm  = normalize_hand_sequence(full_hand)
                                     hand_arr   = np.expand_dims(hand_norm, axis=0)
 
-                                    mot_preds  = motion_model.predict(hand_arr, verbose=0)[0]
+                                    mot_preds = (motion_fn(tf.constant(hand_arr, tf.float32))[0].numpy()
+                                                 if motion_fn else motion_model.predict(hand_arr, verbose=0)[0])
                                     sorted_idx = np.argsort(mot_preds)[::-1]
                                     mot_idx    = int(sorted_idx[0])
                                     mot_conf   = float(mot_preds[mot_idx])
