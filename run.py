@@ -1,4 +1,5 @@
-from bmo.ui.main_window import main
+from bmo.ui.boot import main
+
 
 if __name__ == "__main__":
     main()

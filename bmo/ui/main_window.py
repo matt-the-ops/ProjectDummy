@@ -732,8 +732,21 @@ class ShieldFSLApp:
     BOT_Y      = 870
     BOT_H      = 156
 
+    @classmethod
+    def prebuild(cls):
+        """Render the static shell without Tk, so it can run in a worker thread."""
+        t = cls.__new__(cls)
+        t._logo_rgba = t._logo_alpha = t._logo_rim = t._logo_rim_mask = t._logo_shadow = None
+        t._logo_pad, t._logo_w, t._logo_h = 20, 50, 50
+        t._load_logo()
+        return t._pre_render_ui_shell()
+
+    def start(self):
+        trigger_calibration()
+        self._go.set()
+
     # ────────────────────────────────────────────────────
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, shell=None, autostart=True):
         self.root = root
         self.root.title("Project B.M.O")
         self.root.configure(bg=BG_TOP)
@@ -825,7 +838,7 @@ class ShieldFSLApp:
         self._load_logo()
 
         # UI Shell Cache: Pre-render static elements
-        self.ui_shell_cache = self._pre_render_ui_shell()
+        self.ui_shell_cache = shell if shell is not None else self._pre_render_ui_shell()
         self._update_layout_geometry()
 
         # Render caches for 60 FPS performance
@@ -876,6 +889,10 @@ class ShieldFSLApp:
         self._last_draw   = time.time()
 
         # Start ML thread
+        self.ml_ready = threading.Event()
+        self._go = threading.Event()
+        if autostart:
+            self._go.set()
         self._running = True
         self._ml_thread = threading.Thread(target=self._ml_loop, daemon=True)
         self._ml_thread.start()
@@ -1257,6 +1274,19 @@ class ShieldFSLApp:
             model_complexity=0,
         ) as holistic:
 
+            holistic.process(np.zeros((
+                int(settings.get("ml_h", 240)),
+                int(settings.get("ml_w", 320)),
+                3,
+            ), np.uint8))
+            try:
+                letter_model.predict([[0.0] * 63])
+            except Exception:
+                pass
+            self.ml_ready.set()
+            self._go.wait()
+            _prev_t = time.time()
+
             while self._running:
                 fid, frame = cam_capture.read_latest(last_fid)
                 if frame is None:
@@ -1620,6 +1650,9 @@ class ShieldFSLApp:
     def _gui_loop(self):
         if not self._running:
             return
+        if not self._go.is_set():
+            self.root.after(100, self._gui_loop)
+            return
         t_start = time.time()
         try:
             self._render()
@@ -1680,7 +1713,7 @@ class ShieldFSLApp:
         _draw_text(draw, badge_x + 22, badge_y + 12, "ONLINE", size=10, fill=GREEN_TEXT, bold=True, anchor="lm")
 
         # Subtitle
-        _draw_text(draw, title_x, cy + 16, "Filipino Sign Language Neural Core v2.4", size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
+        _draw_text(draw, title_x, cy + 16, "Filipino Sign Language Recognition and Translation v2.4", size=13, fill=TEXT_MUTED, bold=False, anchor="lm")
 
         # (Mode switch is a dynamic layer: see _update_mode_switch)
 
@@ -2282,6 +2315,7 @@ class ShieldFSLApp:
 
     def destroy(self):
         self._running = False
+        self._go.set()
         cam_capture.stop()
         try:
             if sys.platform.startswith("win"):

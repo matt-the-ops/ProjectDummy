@@ -141,8 +141,23 @@ class NonFSLWindow:
     PAL_LX, PAL_LY = PAD + 16, PALETTE_Y + 12
     PAL_LW, PAL_LH = W - PAD * 2 - 32, PALETTE_H - 24
 
+    @classmethod
+    def prebuild(cls):
+        t = cls.__new__(cls)
+        t._logo_rgba = t._logo_alpha = t._logo_rim = t._logo_rim_mask = t._logo_shadow = None
+        t._logo_pad, t._logo_w, t._logo_h = 20, 50, 50
+        t._load_logo()
+        t.palette = load_icon_palette()
+        t._cached_icons = {}
+        t._load_palette_icons()
+        return {
+            "shell": t._pre_render_ui_shell(),
+            "palette": t.palette,
+            "icons": t._cached_icons,
+        }
+
     def __init__(self, master=None, on_close_callback=None, get_cam_fn=None,
-                 get_raw_frame_fn=None, speak_fn=None, ping_fn=None):
+                 get_raw_frame_fn=None, speak_fn=None, ping_fn=None, pre=None):
         """
         get_raw_frame_fn(last_id) -> (frame_id, bgr_ndarray | None)   [preferred, no copy]
         get_cam_fn()              -> PIL.Image | None                  [legacy fallback]
@@ -152,6 +167,8 @@ class NonFSLWindow:
             self.window = tk.Tk()
         else:
             self.window = tk.Toplevel(master)
+        if pre is not None:
+            self.window.withdraw()
 
         self.window.title("Project B.M.O — Co-Op Communicator (Partner Kiosk)")
         self.window.configure(bg=BG_LIGHT)
@@ -205,19 +222,12 @@ class NonFSLWindow:
         self._toast_key = None
         self._toast_visible = False
 
-        # ── Logo ──
-        self._logo_rgba = self._logo_alpha = self._logo_rim = None
-        self._logo_rim_mask = self._logo_shadow = None
-        self._logo_pad, self._logo_w, self._logo_h = 20, 50, 50
-        self._load_logo()
-
-        # ── Palette (Hard Rule: trained AND in icon_map.json) – must exist before shell ──
-        self.palette = load_icon_palette()
-        self._cached_icons = {}
-        self._load_palette_icons()
-
+        if pre is None:
+            pre = NonFSLWindow.prebuild()
+        self.palette = pre["palette"]
+        self._cached_icons = pre["icons"]
         self._measure = ImageDraw.Draw(Image.new("L", (1, 1)))
-        self.ui_shell_cache = self._pre_render_ui_shell()
+        self.ui_shell_cache = pre["shell"]
 
         # ── State ──
         self.sentence_tokens = []
