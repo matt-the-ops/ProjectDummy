@@ -39,8 +39,17 @@ def train_letter_model():
     for lbl, count in zip(labels, counts):
         print(f"    - Class '{lbl}': {count} samples")
 
-    if len(labels) < 2:
-        print("[!] Error: Need at least 2 letter classes to train a classifier.")
+    if len(labels) < 1:
+        print("[!] Error: No letter classes found to train.")
+        return
+
+    if len(labels) == 1:
+        print(f"[*] Single class ('{labels[0]}') present. Training single-class classifier.")
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X, y)
+        os.makedirs(os.path.dirname(MODEL_FILE), exist_ok=True)
+        atomic_replace_pickle(MODEL_FILE, {'model': model})
+        print(f"[OK] Successfully saved trained letter model to '{MODEL_FILE}'.")
         return
 
     try:
