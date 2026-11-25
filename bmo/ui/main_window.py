@@ -398,11 +398,12 @@ def _round_rect_pts(x0, y0, x1, y1, r):
 #  App State
 # ─────────────────────────────────────────────
 LETTER_BUFFER_SIZE   = 12
-STABILIZATION_DELAY  = 2.5
-GLOBAL_COOLDOWN      = 1.8
-WORD_COOLDOWN        = 0.8     # Snappy real-time inter-word cooldown
-WORD_DEBOUNCE_TIME   = 1.0     # Lowered for faster consecutive signing
-TRANSLATE_ABSENCE_DELAY = 3.0  # Seconds with no hands on screen before auto-translating sentence
+STABILIZATION_DELAY  = 1.0    # Seconds to hold a letter sign before it registers
+GLOBAL_COOLDOWN      = 1.0    # Cooldown between letter/motion character scans
+WORD_COOLDOWN        = 1.0    # Cooldown between word scans
+WORD_DEBOUNCE_TIME   = 1.0    # Debounce window to prevent duplicate word registration
+TRANSLATE_ABSENCE_DELAY = 2.0  # Seconds with no hands on screen before auto-translating sentence
+WORD_SCAN_DURATION   = 1.0     # Seconds to scan each word gesture before evaluating
 WORD_SEQ_LEN         = 40
 MOTION_CONF_THRESH   = 0.45
 FACE_CONF_THRESH     = 0.35
@@ -411,6 +412,7 @@ MIN_MOTION_ENERGY    = 0.005
 
 last_predicted_word = ""
 last_word_time      = 0.0
+word_scan_start_time = None
 prediction_buffer   = collections.deque(maxlen=LETTER_BUFFER_SIZE)
 pinky_history       = collections.deque(maxlen=30)
 index_history       = collections.deque(maxlen=30)
@@ -426,6 +428,23 @@ suppression_end     = 0.0
 hand_sequence_buffer  = collections.deque(maxlen=WORD_SEQ_LEN)
 wrist_sequence_buffer = collections.deque(maxlen=WORD_SEQ_LEN)
 face_sequence_buffer  = collections.deque(maxlen=WORD_SEQ_LEN)
+
+def _resample_sequence(arr: np.ndarray, target_len: int) -> np.ndarray:
+    """Linearly resample a (T, ...) sequence along axis 0 to target_len frames."""
+    curr_len = arr.shape[0]
+    if curr_len == target_len:
+        return arr
+    if curr_len <= 1:
+        return np.repeat(arr, target_len, axis=0)
+    x_old = np.linspace(0.0, 1.0, curr_len, dtype=np.float32)
+    x_new = np.linspace(0.0, 1.0, target_len, dtype=np.float32)
+    flat = arr.reshape(curr_len, -1)
+    idx = np.searchsorted(x_old, x_new, side="right") - 1
+    idx = np.clip(idx, 0, curr_len - 2)
+    denom = x_old[idx + 1] - x_old[idx]
+    alpha = np.where(denom > 0, (x_new - x_old[idx]) / denom, 0.0)[:, None]
+    out = flat[idx] * (1.0 - alpha) + flat[idx + 1] * alpha
+    return out.reshape((target_len,) + arr.shape[1:]).astype(np.float32)
 
 debug_motion_word = "--"
 debug_motion_conf = 0.0
@@ -1068,7 +1087,7 @@ class ShieldFSLApp:
         global debug_motion_word, debug_face_word, debug_motion_conf
         global debug_face_conf, gate_status, last_stable_char
         global camera_hidden
-        global translated_output, sentence_translated, hands_absent_start_time
+        global translated_output, sentence_translated, hands_absent_start_time, word_scan_start_time
 
         k = _resolve_key(event.keysym.lower())
         if k == '__settings__':
@@ -1085,6 +1104,7 @@ class ShieldFSLApp:
             translated_output = ""
             sentence_translated = False
             hands_absent_start_time = None
+            word_scan_start_time = None
             motion_state = ""
             pinky_history.clear(); index_history.clear()
             prediction_buffer.clear()
@@ -1097,6 +1117,7 @@ class ShieldFSLApp:
             translated_output = ""
             sentence_translated = False
             hands_absent_start_time = None
+            word_scan_start_time = None
             hand_sequence_buffer.clear()
             debug_motion_word = "--"; debug_face_word = "--"
             debug_motion_conf = 0.0;  debug_face_conf  = 0.0
@@ -1121,7 +1142,6 @@ class ShieldFSLApp:
                 translated_output = translate_sentence(typed_output)
                 sentence_translated = True
                 set_notification(f"TRANSLATED: {translated_output}")
-                speak_text(translated_output)
         elif k == 'space':
             typed_output += " "
             sentence_translated = False
@@ -1173,7 +1193,7 @@ class ShieldFSLApp:
         global pinky_history, index_history, prediction_buffer
         global hand_sequence_buffer, debug_motion_word, debug_face_word
         global debug_motion_conf, debug_face_conf, gate_status, last_stable_char
-        global translated_output, sentence_translated, hands_absent_start_time
+        global translated_output, sentence_translated, hands_absent_start_time, word_scan_start_time
 
         if not hasattr(self, 'ui_scale') or self.ui_scale <= 0:
             return
@@ -1192,6 +1212,7 @@ class ShieldFSLApp:
                 translated_output = ""
                 sentence_translated = False
                 hands_absent_start_time = None
+                word_scan_start_time = None
                 pinky_history.clear(); index_history.clear()
                 prediction_buffer.clear()
                 hand_sequence_buffer.clear()
@@ -1203,6 +1224,7 @@ class ShieldFSLApp:
                 translated_output = ""
                 sentence_translated = False
                 hands_absent_start_time = None
+                word_scan_start_time = None
                 hand_sequence_buffer.clear()
                 debug_motion_word = "--"; debug_face_word = "--"
                 debug_motion_conf = 0.0;  debug_face_conf  = 0.0
@@ -1250,7 +1272,7 @@ class ShieldFSLApp:
     def _ml_loop(self):
         lower_ml_thread_priority()
         global current_frame_prediction, typed_output, tts_is_speaking
-        global last_predicted_word, last_word_time, prediction_buffer
+        global last_predicted_word, last_word_time, word_scan_start_time, prediction_buffer
         global pinky_history, index_history, last_stable_char, stable_start_time
         global global_cooldown_end, motion_state, motion_cooldown_frames
         global suppress_char, suppression_end
@@ -1258,7 +1280,7 @@ class ShieldFSLApp:
         global debug_motion_word, debug_motion_conf, debug_face_word, debug_face_conf
         global gate_status, missing_frames, node_count, fps_value
         global lux_value, dist_cm
-        global translated_output, sentence_translated, hands_absent_start_time
+        global translated_output, sentence_translated, hands_absent_start_time, word_scan_start_time
 
         last_left_hand  = None
         last_right_hand = None
@@ -1358,6 +1380,7 @@ class ShieldFSLApp:
                     hand_sequence_buffer.clear()
                     wrist_sequence_buffer.clear()
                     face_sequence_buffer.clear()
+                    word_scan_start_time = None
                     pinky_history.clear()
                     index_history.clear()
                     prediction_buffer.clear()
@@ -1371,10 +1394,11 @@ class ShieldFSLApp:
                                 results.right_hand_landmarks is not None)
                     if not has_hand:
                         missing_frames += 1
-                        if missing_frames >= 3:
+                        if missing_frames >= 6:
                             hand_sequence_buffer.clear()
                             wrist_sequence_buffer.clear()
                             face_sequence_buffer.clear()
+                            word_scan_start_time = None
                             last_predicted_word = ""
                             debug_motion_word = "--"; debug_motion_conf = 0.0
                             debug_face_word   = "--"; debug_face_conf   = 0.0
@@ -1385,25 +1409,39 @@ class ShieldFSLApp:
                             hand_sequence_buffer.clear()
                             wrist_sequence_buffer.clear()
                             face_sequence_buffer.clear()
+                            word_scan_start_time = None
                             gate_status = "COOLDOWN"
                         else:
+                            if word_scan_start_time is None or len(hand_sequence_buffer) == 0:
+                                word_scan_start_time = current_time
                             hand_sequence_buffer.append(extract_hand_frame(results))
                             wrist_sequence_buffer.append(get_raw_hand_anchors(results))
                             face_sequence_buffer.append(extract_face_frame(results))
 
-                            if len(hand_sequence_buffer) == WORD_SEQ_LEN:
-                                shape_arr   = np.array(hand_sequence_buffer, dtype=np.float32)
+                            scan_elapsed = current_time - word_scan_start_time
+                            if (scan_elapsed >= WORD_SCAN_DURATION and len(hand_sequence_buffer) >= 5) or len(hand_sequence_buffer) == WORD_SEQ_LEN:
+                                raw_shape   = np.array(hand_sequence_buffer, dtype=np.float32)
+                                shape_arr   = _resample_sequence(raw_shape, WORD_SEQ_LEN)
                                 frame_diffs = np.diff(shape_arr, axis=0)
                                 energy      = float(np.mean(np.linalg.norm(frame_diffs, axis=1)))
 
-                                if energy < MIN_MOTION_ENERGY:
-                                    gate_status = "NO MOTION"
-                                    for _ in range(8):
+                                def _slide_word_window():
+                                    global word_scan_start_time
+                                    pop_n = max(1, len(hand_sequence_buffer) // 4)
+                                    for _ in range(pop_n):
                                         if hand_sequence_buffer:  hand_sequence_buffer.popleft()
                                         if wrist_sequence_buffer: wrist_sequence_buffer.popleft()
                                         if face_sequence_buffer:  face_sequence_buffer.popleft()
+                                    if word_scan_start_time is not None:
+                                        word_scan_start_time = min(current_time, word_scan_start_time + WORD_SCAN_DURATION * 0.25)
+
+                                if energy < MIN_MOTION_ENERGY:
+                                    gate_status = "NO MOTION"
+                                    _slide_word_window()
                                 else:
-                                    motion_dyn = build_motion_dynamics_and_trajectory(list(wrist_sequence_buffer))
+                                    raw_wrist  = np.array(wrist_sequence_buffer, dtype=np.float32)
+                                    wrist_res  = _resample_sequence(raw_wrist, WORD_SEQ_LEN)
+                                    motion_dyn = build_motion_dynamics_and_trajectory(wrist_res)
                                     full_hand  = np.concatenate([shape_arr, motion_dyn], axis=1)
                                     hand_norm  = normalize_hand_sequence(full_hand)
                                     hand_arr   = np.expand_dims(hand_norm, axis=0)
@@ -1456,10 +1494,7 @@ class ShieldFSLApp:
                                         if (out_word == last_predicted_word and
                                                 current_time - last_word_time < WORD_DEBOUNCE_TIME):
                                             gate_status = "DUPLICATE"
-                                            for _ in range(8):
-                                                if hand_sequence_buffer:  hand_sequence_buffer.popleft()
-                                                if wrist_sequence_buffer: wrist_sequence_buffer.popleft()
-                                                if face_sequence_buffer:  face_sequence_buffer.popleft()
+                                            _slide_word_window()
                                         else:
                                             last_predicted_word = out_word
                                             last_word_time      = current_time
@@ -1471,15 +1506,13 @@ class ShieldFSLApp:
                                                 typed_output       += out_word + " "
                                             global_cooldown_end = current_time + WORD_COOLDOWN
                                             hands_absent_start_time = None
+                                            word_scan_start_time = None
                                             hand_sequence_buffer.clear()
                                             wrist_sequence_buffer.clear()
                                             face_sequence_buffer.clear()
                                             set_notification("OK: " + out_word)
                                     else:
-                                        for _ in range(8):
-                                            if hand_sequence_buffer:  hand_sequence_buffer.popleft()
-                                            if wrist_sequence_buffer: wrist_sequence_buffer.popleft()
-                                            if face_sequence_buffer:  face_sequence_buffer.popleft()
+                                        _slide_word_window()
 
                 # ── MODE 1: LETTERS ──
                 elif current_mode == 1:
@@ -1611,7 +1644,6 @@ class ShieldFSLApp:
                             sentence_translated = True
                             hands_absent_start_time = None
                             set_notification(f"TRANSLATED: {translated_output}")
-                            speak_text(translated_output)
                     else:
                         hands_absent_start_time = None
 
@@ -1919,9 +1951,15 @@ class ShieldFSLApp:
         slot_w = mw // 4
         cy_met = my + mh // 2
 
-        stab_val = min(debug_motion_conf / 100.0 if current_mode == 2
-                       else (min((time.time() - stable_start_time) / STABILIZATION_DELAY, 1.0)
-                             if current_frame_prediction else 0.0), 1.0)
+        if current_mode == 2:
+            if now < global_cooldown_end or word_scan_start_time is None:
+                stab_val = 0.0
+            else:
+                stab_val = min((now - word_scan_start_time) / WORD_SCAN_DURATION, 1.0)
+        else:
+            stab_val = (min((now - stable_start_time) / STABILIZATION_DELAY, 1.0)
+                        if current_frame_prediction and now >= global_cooldown_end else 0.0)
+        stab_val = min(max(stab_val, 0.0), 1.0)
         rms_val = max(0.0, 0.1 - (stab_val * 0.1))
 
         self.canvas.itemconfig(self.stat_text_ids[0], text=f"{node_count} Nodes")
@@ -2298,8 +2336,20 @@ class ShieldFSLApp:
 
             status_y = sq_y + sq_size + 36
             active_pred = current_frame_prediction if current_mode == 1 else (debug_motion_word if debug_motion_word != "--" else "")
-            if active_pred:
+            if now < global_cooldown_end:
+                cd_rem = max(0.1, global_cooldown_end - now)
+                _draw_text(draw, rw // 2, status_y, f"Cooldown: {cd_rem:.1f}s", size=18, fill=TEXT_MUTED, bold=True, anchor="mm")
+                _draw_text(draw, rw // 2, status_y + 28, "Get ready for the next sign...", size=12, fill=TEXT_FAINT, anchor="mm")
+            elif active_pred:
                 _draw_text(draw, rw // 2, status_y, f"Recognized: {active_pred.upper()}", size=18, fill=TEXT_MAIN, bold=True, anchor="mm")
+            elif current_mode == 2 and word_scan_start_time is not None and len(hand_sequence_buffer) > 0:
+                scan_pct = int(min((now - word_scan_start_time) / WORD_SCAN_DURATION, 1.0) * 100)
+                _draw_text(draw, rw // 2, status_y, f"Scanning Word... {scan_pct}%", size=18, fill=BLUE_PRIMARY, bold=True, anchor="mm")
+                _draw_text(draw, rw // 2, status_y + 28, "Hold gesture for 1s to scan", size=12, fill=TEXT_FAINT, anchor="mm")
+            elif current_mode == 1 and current_frame_prediction:
+                scan_pct = int(min((now - stable_start_time) / STABILIZATION_DELAY, 1.0) * 100)
+                _draw_text(draw, rw // 2, status_y, f"Scanning: {current_frame_prediction.upper()} ({scan_pct}%)", size=18, fill=BLUE_PRIMARY, bold=True, anchor="mm")
+                _draw_text(draw, rw // 2, status_y + 28, "Hold pose for 1s to scan", size=12, fill=TEXT_FAINT, anchor="mm")
             else:
                 _draw_text(draw, rw // 2, status_y, "Waiting for your sign...", size=15, fill=TEXT_MUTED, bold=False, anchor="mm")
                 _draw_text(draw, rw // 2, status_y + 28, "Partner messages will appear here as captions & sign previews", size=12, fill=TEXT_FAINT, anchor="mm")
